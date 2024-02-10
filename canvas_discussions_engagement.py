@@ -1,7 +1,9 @@
 import csv
 import requests
 import json
+from json import JSONDecodeError
 from pathlib import Path
+import sys
 
 
 class Canvas:
@@ -9,10 +11,17 @@ class Canvas:
         self.instance = instance
 
     def get_token(self=None):
-        with (open(
-                r'\Users\Levester\Desktop\cred.json')
-        as f):
-            cred = json.load(f)
+        try:
+            # In later updates, may need to provide alternatives for user to
+            # type in path another credentials file if error occurs
+            with (open(r'\Users\Levester\Desktop\cred.json') as f):
+                cred = json.load(f)
+        except FileNotFoundError:
+            print(f"The credentials file cred.json was not found.")
+            sys.exit(1)
+        except JSONDecodeError:
+            print(f"The credentials file cred.json contains invalid JSON.")
+            sys.exit(1)
         return cred
 
     server_url = {'LPS_Production': 'https://canvas.upenn.edu/', 'LPS_Test':
@@ -46,6 +55,10 @@ class Canvas:
         print("Response status:", response.status_code)
         print("Response text:", response.text[:500])
         print("Processed students data:", students)
+        print(type(students))
+        for student in students:
+            print(type(student))
+            print(student['name'])
 
         if isinstance(students, list) and all(
                 isinstance(students, dict) for student in students):
@@ -130,6 +143,7 @@ class Canvas:
             return
         # Determine the path to the user's download folder
         download_folder = Path.home() / 'Downloads'
+        print(download_folder)
         if not download_folder.exists():
             download_folder.mkdir()
             print(f"Created folder: {download_folder}")
