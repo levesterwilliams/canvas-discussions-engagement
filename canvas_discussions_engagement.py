@@ -13,7 +13,7 @@ class Canvas:
     def get_token(self=None):
         try:
             # In later updates, may need to provide alternatives for user to
-            # type in path another credentials file if error occurs
+            # type in another credentials file if error occurs
             with (open(r'\Users\Levester\Desktop\cred.json') as f):
                 cred = json.load(f)
         except FileNotFoundError:
@@ -46,14 +46,13 @@ class Canvas:
 
         try:
             students = response.json()
-        except json.JSONDecodeError:
+        except JSONDecodeError:
             print("Failed to decode data from response")
+            sys.exit(1)
 
 
         # Debugging statements
         print("Course ID:", course_id)
-        print("Response status:", response.status_code)
-        print("Response text:", response.text[:500])
         print("Processed students data:", students)
         print(type(students))
         for student in students:
@@ -61,12 +60,11 @@ class Canvas:
             print(student['name'])
 
         if isinstance(students, list) and all(
-                isinstance(students, dict) for student in students):
-            return {student['id']: student['name'] for student in students}
+                isinstance(student, dict) for student in students):
+            return {student['name'] for student in students}
         else:
             print("Error: Unexpected API response format")
-            print("In get_student()")
-            return {}
+            sys.exit(1)
 
     def get_course_discussion_data(self, course_id):
         student_discussion_data = {}
@@ -77,55 +75,54 @@ class Canvas:
 
         while page_url:
             response = requests.get(page_url, headers=self.headers())
-            print("Response status:", response.status_code)
-
-            # Check if the response status code is OK
             if response.status_code != 200:
                 raise Exception(f'{response.status_code},{response.text}')
 
             try:
                 discussion_topics = response.json()
-            except json.JSONDecodeError:
+            except JSONDecodeError:
                 print("Failed to decode JSON from response")
-                break
+                sys.exit(1)
 
             print("Discussion topics:", discussion_topics)
 
             for topic in discussion_topics:
                 topic_title = topic.get('title', 'Unknown Title')
+                print(f"Topic title is: {topic_title}")
                 self.process_discussion_topic(topic, course_id,
                                               student_discussion_data)
-
+                print(f"Student discussion is: {student_discussion_data}")
             page_url = self.get_next_page_url(response.headers.get('Link'))
 
+        print(f"Student discussion is {student_discussion_data}")
         return student_discussion_data
 
     def process_discussion_topic(self, topic, course_id,
                                  student_discussion_data):
-        discussion_posts_url = f'{self.server_url[self.instance]}api/v1/courses/{course_id}/discussion_topics/{topic["id"]}/posts'
-        response = requests.get(discussion_posts_url, headers=self.headers())
-
+        discussion_post_url = f'{self.server_url[self.instance]}api/v1/courses/{course_id}/discussion_topics/{topic["id"]}'
+        response = requests.get(discussion_post_url, headers=self.headers())
         if response.status_code != 200:
             print(f"Error fetching discussion posts: {response.status_code}")
             return
 
         try:
-            discussion_posts = response.json()
+            discussion_post = response.json()
         except json.JSONDecodeError:
             print("Failed to decode JSON from discussion posts response")
-            return
+            sys.exit(1)
 
-        for discussion_post in discussion_posts:
-            student_id = discussion_post.get('author_id')
-            if student_id:
-                if student_id not in student_discussion_data:
-                    student_discussion_data[student_id] = {}
-                if discussion_post.get('parent_id') is None:  # Original post
-                    student_discussion_data[student_id][
-                        f'{topic["title"]} - Original Post'] = True
-                else:  # Reply
-                    student_discussion_data[student_id][
-                        f'{topic["title"]} - Replies'] = True
+        print(f"Discussion post is: {discussion_post}")
+        student_name = discussion_post.get('user_name')
+        print(f"Student Name: {student_name}")
+        if student_name:
+            if student_name not in student_discussion_data:
+                student_discussion_data[student_name] = {}
+            if discussion_post.get('parent_id') is None:  # Original post
+                student_discussion_data[student_name][
+                    f'{topic["title"]} - Original Post'] = True
+            else:  # Reply
+                student_discussion_data[student_name][
+                    f'{topic["title"]} - Replies'] = True
 
     def get_next_page_url(self, link_header):
         if link_header:
@@ -180,7 +177,12 @@ def main(course_num):
     #Debugging statements
     course_name = canvas.get_course_name(course_num)
     print(f"Course Name: {course_name}")
-    canvas.get_students(course_num)
+
+    # Return a set of student name
+    students_in_course = canvas.get_students(course_num)
+    if len(students_in_course) == 0:
+        print("No students are listed in the course for Canvas.")
+        sys.exit(1)
 
     # Get the discussion data for the course
     student_discussion_data = canvas.get_course_discussion_data(course_num)
