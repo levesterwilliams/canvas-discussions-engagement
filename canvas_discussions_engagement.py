@@ -61,6 +61,7 @@ class Canvas:
 
         if isinstance(students, list) and all(
                 isinstance(student, dict) for student in students):
+            # need to return a list of dicts with name
             return {student['name'] for student in students}
         else:
             print("Error: Unexpected API response format")
@@ -88,14 +89,52 @@ class Canvas:
 
             for topic in discussion_topics:
                 topic_title = topic.get('title', 'Unknown Title')
+                topic_id = topic.get('id', 'Unknown')
                 print(f"Topic title is: {topic_title}")
                 self.process_discussion_topic(topic, course_id,
                                               student_discussion_data)
-                print(f"Student discussion is: {student_discussion_data}")
+                self.process_full_topic_view(course_id, topic_id,
+                                        student_discussion_data, topic_title)
             page_url = self.get_next_page_url(response.headers.get('Link'))
 
         print(f"Student discussion is {student_discussion_data}")
         return student_discussion_data
+
+    def fetch_full_topic_view(self, course_id, topic_id):
+        full_topic_view_url = f'{self.server_url[self.instance]}/api/v1/courses/{course_id}/discussion_topics/{topic_id}/view'
+        response = requests.get(full_topic_view_url, headers=self.headers())
+        if response.status_code == 200:
+            try:
+                full_topic_view = response.json()
+                return full_topic_view
+            except JSONDecodeError:
+                print("Failed to decode JSON from response")
+                sys.exit(1)
+        elif response.status_code == 403:
+            #skip over as topic requires user to have posted
+            return None
+        # NOTE: may need to handle 503 error if the cached structure is not yet
+        # ready and prompt the caller to try again or sleep and wait and call
+        # again
+        else:
+            print(
+                f"Error fetching full topic view: {response.status_code}, {response.text}")
+            return None
+
+    def process_full_topic_view(self, course_id, topic_id,
+                                student_discussion_data, topic_title):
+        topic_view = self.fetch_full_topic_view(course_id, topic_id)
+        if not topic_view:
+            return
+
+        # Assuming 'student_discussion_data' is structured as {student_id: {topic_title: True/False for replies}}
+        for entry in topic_view.get('view', []):  # Iterate through all entries
+            user_id = entry.get('user_id')
+            print(f"{user_id} - {topic_title}")
+            if user_id and user_id in student_discussion_data:
+                # Mark student as having replied to the topic
+                student_discussion_data[user_id][
+                    f"{topic_title} - Replies"] = True
 
     def process_discussion_topic(self, topic, course_id,
                                  student_discussion_data):
@@ -114,6 +153,7 @@ class Canvas:
         print(f"Discussion post is: {discussion_post}")
         student_name = discussion_post.get('user_name')
         print(f"Student Name: {student_name}")
+        print(f"student discussion data is: {type(student_discussion_data)}")
         if student_name:
             if student_name not in student_discussion_data:
                 student_discussion_data[student_name] = {}
@@ -178,7 +218,7 @@ def main(course_num):
     course_name = canvas.get_course_name(course_num)
     print(f"Course Name: {course_name}")
 
-    # Return a set of student name
+    # Return a set of student names
     students_in_course = canvas.get_students(course_num)
     if len(students_in_course) == 0:
         print("No students are listed in the course for Canvas.")
