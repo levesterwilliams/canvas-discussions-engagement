@@ -16,11 +16,14 @@ class Canvas:
             # type in another credentials file if error occurs
             with (open(r'\Users\Levester\Desktop\cred.json') as f):
                 cred = json.load(f)
+            f.close()
         except FileNotFoundError:
             print(f"The credentials file cred.json was not found.")
+            f.close()
             sys.exit(1)
         except JSONDecodeError:
             print(f"The credentials file cred.json contains invalid JSON.")
+            f.close()
             sys.exit(1)
         return cred
 
@@ -49,7 +52,6 @@ class Canvas:
         except JSONDecodeError:
             print("Failed to decode data from response")
             sys.exit(1)
-
 
         # Debugging statements
         print("Course ID:", course_id)
@@ -86,21 +88,31 @@ class Canvas:
                 sys.exit(1)
 
             print("Discussion topics:", discussion_topics)
-
+            list_topic_titles = []
             for topic in discussion_topics:
                 topic_title = topic.get('title', 'Unknown Title')
                 topic_id = topic.get('id', 'Unknown')
                 print(f"Topic title is: {topic_title}")
-                self.process_discussion_topic(topic, course_id,
+                original_topic_title = self.process_discussion_topic(topic,
+                                                                course_id,
                                               student_discussion_data)
-                self.process_full_topic_view(course_id, topic_id,
+                replies_topic_titles = self.process_full_topic_view(course_id,
+                                                             topic_id,
                                         student_discussion_data, topic_title)
+                #Appends titles to list
+                if original_topic_title:
+                    list_topic_titles.append(original_topic_title[0])
+                if replies_topic_titles:
+                    list_topic_titles.extend(replies_topic_titles)
             page_url = self.get_next_page_url(response.headers.get('Link'))
 
-        print(f"Student discussion is {student_discussion_data}")
-        return student_discussion_data
 
-    def fetch_full_topic_view(self, course_id, topic_id):
+
+        print(f"Student discussion is {student_discussion_data}")
+        print(f"Topic titles are {list_topic_titles}")
+        return student_discussion_data, list_topic_titles
+
+    def get_full_topic_view(self, course_id, topic_id):
         full_topic_view_url = f'{self.server_url[self.instance]}/api/v1/courses/{course_id}/discussion_topics/{topic_id}/view'
         response = requests.get(full_topic_view_url, headers=self.headers())
         if response.status_code == 200:
@@ -123,18 +135,27 @@ class Canvas:
 
     def process_full_topic_view(self, course_id, topic_id,
                                 student_discussion_data, topic_title):
-        topic_view = self.fetch_full_topic_view(course_id, topic_id)
+        topic_view = self.get_full_topic_view(course_id, topic_id)
         if not topic_view:
-            return
-
-        # Assuming 'student_discussion_data' is structured as {student_id: {topic_title: True/False for replies}}
-        for entry in topic_view.get('view', []):  # Iterate through all entries
-            user_id = entry.get('user_id')
-            print(f"{user_id} - {topic_title}")
-            if user_id and user_id in student_discussion_data:
+            return []
+        list_topic_titles = []
+        # student_discussion_data' is structured as
+        # {student_id: {topic_title: True/False for replies}}
+        for entry in topic_view.get('participants', []):  # Iterate through all
+            # entries
+            student_name = entry.get('display_name')
+            print(f"{student_name} - {topic_title}")
+            if student_name not in student_discussion_data:
+                student_discussion_data[student_name] = {}
+            else:
                 # Mark student as having replied to the topic
-                student_discussion_data[user_id][
-                    f"{topic_title} - Replies"] = True
+                topic_replies_title = f"{topic_title} - Replies"
+                if topic_title not in list_topic_titles:
+                    list_topic_titles.append(topic_replies_title)
+                student_discussion_data[student_name][
+                   topic_replies_title] = True
+        print(f'Topic replies in full_view is{list_topic_titles}')
+        return list_topic_titles
 
     def process_discussion_topic(self, topic, course_id,
                                  student_discussion_data):
@@ -142,7 +163,7 @@ class Canvas:
         response = requests.get(discussion_post_url, headers=self.headers())
         if response.status_code != 200:
             print(f"Error fetching discussion posts: {response.status_code}")
-            return
+            return []
 
         try:
             discussion_post = response.json()
@@ -150,19 +171,22 @@ class Canvas:
             print("Failed to decode JSON from discussion posts response")
             sys.exit(1)
 
+        list_topic_titles = []
+
         print(f"Discussion post is: {discussion_post}")
         student_name = discussion_post.get('user_name')
-        print(f"Student Name: {student_name}")
+        print(f"Author Name: {student_name}")
         print(f"student discussion data is: {type(student_discussion_data)}")
         if student_name:
             if student_name not in student_discussion_data:
                 student_discussion_data[student_name] = {}
             if discussion_post.get('parent_id') is None:  # Original post
+                topic_title = f'{topic["title"]} - Original Post'
                 student_discussion_data[student_name][
-                    f'{topic["title"]} - Original Post'] = True
-            else:  # Reply
-                student_discussion_data[student_name][
-                    f'{topic["title"]} - Replies'] = True
+                    topic_title] = True
+                list_topic_titles.append(topic_title)
+                print(f'New topic title is {topic_title}')
+        return list_topic_titles
 
     def get_next_page_url(self, link_header):
         if link_header:
@@ -173,7 +197,8 @@ class Canvas:
                     return next_link
         return None
 
-    def write_discussion_data_to_csv(self, student_discussion_data):
+    def write_discussion_data_to_csv(self, student_discussion_data,
+                                     discussion_topics):
         # Return without outputting a csv file if no students are found in course
         if not student_discussion_data:
             print("No student discussion data")
@@ -187,15 +212,16 @@ class Canvas:
 
         output_file_path = download_folder / 'discusssion_data.csv'
 
-        with open(output_file_path, 'w', newline='') as csvfile:
+        discussion_titles = list(set(discussion_topics))
+
+        headers = ['Student Name']
+        for topic_title in discussion_titles:
+            headers.append(topic_title)
+            #debugging statement
+        print(f'Header titles: {headers}')
+
+        with (open(output_file_path, 'w', newline='') as csvfile):
             writer = csv.writer(csvfile)
-
-            headers = ['Student\'s Name'] + [f"{topic} - Original Post" for
-                                             topic in next(iter(
-                    student_discussion_data.values()), {}).keys()] + [
-                          f"{topic} - Replies" for topic in next(iter(
-                    student_discussion_data.values()), {}).keys()]
-
             writer.writerow(headers)
 
             for student_name, topics in student_discussion_data.items():
@@ -225,10 +251,10 @@ def main(course_num):
         sys.exit(1)
 
     # Get the discussion data for the course
-    student_discussion_data = canvas.get_course_discussion_data(course_num)
+    student_discussion_tuple = canvas.get_course_discussion_data(course_num)
 
     # Write the discussion data to a CSV file
-    canvas.write_discussion_data_to_csv(student_discussion_data)
+    canvas.write_discussion_data_to_csv(student_discussion_tuple[0], student_discussion_tuple[1])
 
 
 if __name__ == '__main__':
