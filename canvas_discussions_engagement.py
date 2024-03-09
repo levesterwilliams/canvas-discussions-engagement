@@ -16,14 +16,11 @@ class Canvas:
             # type in another credentials file if error occurs
             with (open(r'\Users\Levester\Desktop\cred.json') as f):
                 cred = json.load(f)
-            f.close()
         except FileNotFoundError:
             print(f"The credentials file cred.json was not found.")
-            f.close()
             sys.exit(1)
         except JSONDecodeError:
             print(f"The credentials file cred.json contains invalid JSON.")
-            f.close()
             sys.exit(1)
         return cred
 
