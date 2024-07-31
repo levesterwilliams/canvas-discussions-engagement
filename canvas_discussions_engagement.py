@@ -4,7 +4,7 @@ import json
 import sys
 from json import JSONDecodeError
 from pathlib import Path
-from json_freader
+from json_freader import JSONfreader
 
 
 class Canvas:
@@ -12,23 +12,20 @@ class Canvas:
         self.instance = instance
 
     def get_token(self=None):
-        JSONfreader json_reader = JSONfreader()
-
+        reader = JSONfreader()
+        json_file_path = "C:/Users/Levester/Desktop/cred.json"
         try:
-            # In later updates, may need to provide alternatives for user to
-            # type in another credentials file if error occurs
-            with (open(r'\Users\Levester\Desktop\cred.json') as f):
-                cred = json.load(f)
+           cred = reader.load_json_file(json_file_path)
+           return cred
         except FileNotFoundError:
             print(f"The credentials file cred.json was not found.")
             sys.exit(1)
-        except JSONDecodeError:
+        except RuntimeError:
             print(f"The credentials file cred.json contains invalid JSON.")
             sys.exit(1)
         except Exception as e:
-            print(f"Error loading credentials: {e}")
+            print(f"Unexpected error: {e}")
             sys.exit(1)
-        return cred
 
     server_url = {'LPS_Production': 'https://canvas.upenn.edu/', 'LPS_Test':
         'https://upenn.test.instructure.com/'}

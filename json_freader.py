@@ -1,3 +1,10 @@
+#
+# Levester Williams
+# 31 July 2024
+#
+# Platform info:
+# - python 3.11.0
+
 import json
 import logging
 
@@ -5,12 +12,13 @@ import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.ERROR)
 
+
 class JSONfreader:
     def __init__(self):
         """Initializer for JSONfreader class."""
         self._credentials = None
 
-    def load_json_file(self, json_file: str) -> None:
+    def load_json_file(self, json_file: str) -> dict:
         """
         Loads Reddit credentials from an external JSON file.
 
@@ -31,11 +39,12 @@ class JSONfreader:
                 self._credentials = json.load(file)
                 return self._credentials
         except FileNotFoundError as e:
-            logger.error(f"File not found{e}")
-            raise RuntimeError("Failed to load credentials due to missing file.") from e
+            logger.error(f"File not found::{e}.")
+            raise RuntimeError(
+                "Failed to load credentials due to missing file.") from e
         except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON::{e}")
+            logger.error(f"Invalid JSON::{e}.")
             raise RuntimeError("The JSON file contains invalid JSON") from e
         except Exception as e:
-            logger.error(f"Error loading Reddit credentials::{e}")
+            logger.error(f"Error loading Reddit credentials::{e}.")
             raise RuntimeError("Error in loading Reddit credentials") from e
