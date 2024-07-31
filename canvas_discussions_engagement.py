@@ -1,9 +1,10 @@
 import csv
 import requests
 import json
+import sys
 from json import JSONDecodeError
 from pathlib import Path
-import sys
+from json_freader
 
 
 class Canvas:
@@ -11,6 +12,8 @@ class Canvas:
         self.instance = instance
 
     def get_token(self=None):
+        JSONfreader json_reader = JSONfreader()
+
         try:
             # In later updates, may need to provide alternatives for user to
             # type in another credentials file if error occurs
@@ -21,6 +24,9 @@ class Canvas:
             sys.exit(1)
         except JSONDecodeError:
             print(f"The credentials file cred.json contains invalid JSON.")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error loading credentials: {e}")
             sys.exit(1)
         return cred
 
