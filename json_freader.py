@@ -4,6 +4,7 @@
 #
 # Platform info:
 # - python 3.11.0
+#
 
 import json
 import logging
@@ -46,5 +47,5 @@ class JSONfreader:
             logger.error(f"Invalid JSON::{e}.")
             raise RuntimeError("The JSON file contains invalid JSON") from e
         except Exception as e:
-            logger.error(f"Error loading Reddit credentials::{e}.")
-            raise RuntimeError("Error in loading Reddit credentials") from e
+            logger.error(f"Error loading credentials::{e}.")
+            raise RuntimeError("Error in loading credentials") from e

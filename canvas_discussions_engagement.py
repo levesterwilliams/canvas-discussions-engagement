@@ -1,3 +1,11 @@
+#
+# Levester Williams
+# 31 August 2023
+#
+# Platform info:
+# - python 3.11.0
+#
+
 import csv
 import requests
 import json
@@ -11,21 +19,23 @@ class Canvas:
     def __init__(self, instance):
         self.instance = instance
 
-    def get_token(self=None):
+    def get_token(self=None) -> dict:
         reader = JSONfreader()
         json_file_path = "C:/Users/Levester/Desktop/cred.json"
         try:
-           cred = reader.load_json_file(json_file_path)
-           return cred
-        except FileNotFoundError:
-            print(f"The credentials file cred.json was not found.")
+            cred = reader.load_json_file(json_file_path)
+        except FileNotFoundError as e:
+            print(f"The credentials file cred.json was not found")
+            # Must consult with others about whether the client should have
+            # the ability to manually input the filepath to credential
             sys.exit(1)
-        except RuntimeError:
+        except RuntimeError as e:
             print(f"The credentials file cred.json contains invalid JSON.")
             sys.exit(1)
         except Exception as e:
             print(f"Unexpected error: {e}")
             sys.exit(1)
+        return cred
 
     server_url = {'LPS_Production': 'https://canvas.upenn.edu/', 'LPS_Test':
         'https://upenn.test.instructure.com/'}
@@ -94,19 +104,18 @@ class Canvas:
                 topic_id = topic.get('id', 'Unknown')
                 print(f"Topic title is: {topic_title}")
                 original_topic_title = self.process_discussion_topic(topic,
-                                                                course_id,
-                                              student_discussion_data)
+                                                                     course_id,
+                                                                     student_discussion_data)
                 replies_topic_titles = self.process_full_topic_view(course_id,
-                                                             topic_id,
-                                        student_discussion_data, topic_title)
-                #Appends titles to list
+                                                                    topic_id,
+                                                                    student_discussion_data,
+                                                                    topic_title)
+                # Appends titles to list
                 if original_topic_title:
                     list_topic_titles.append(original_topic_title[0])
                 if replies_topic_titles:
                     list_topic_titles.extend(replies_topic_titles)
             page_url = self.get_next_page_url(response.headers.get('Link'))
-
-
 
         print(f"Student discussion is {student_discussion_data}")
         print(f"Topic titles are {list_topic_titles}")
@@ -123,7 +132,7 @@ class Canvas:
                 print("Failed to decode JSON from response")
                 sys.exit(1)
         elif response.status_code == 403:
-            #skip over as topic requires user to have posted
+            # skip over as topic requires user to have posted
             return None
         # NOTE: may need to handle 503 error if the cached structure is not yet
         # ready and prompt the caller to try again or sleep and wait and call
@@ -153,7 +162,7 @@ class Canvas:
                 if topic_title not in list_topic_titles:
                     list_topic_titles.append(topic_replies_title)
                 student_discussion_data[student_name][
-                   topic_replies_title] = True
+                    topic_replies_title] = True
         print(f'Topic replies in full_view is{list_topic_titles}')
         return list_topic_titles
 
@@ -217,7 +226,7 @@ class Canvas:
         headers = ['Student Name']
         for topic_title in discussion_titles:
             headers.append(topic_title)
-            #debugging statement
+            # debugging statement
         print(f'Header titles: {headers}')
 
         with (open(output_file_path, 'w', newline='') as csvfile):
@@ -240,7 +249,7 @@ class Canvas:
 
 
 def main(course_num):
-    #Debugging statements
+    # Debugging statements
     course_name = canvas.get_course_name(course_num)
     print(f"Course Name: {course_name}")
 
@@ -254,7 +263,8 @@ def main(course_num):
     student_discussion_tuple = canvas.get_course_discussion_data(course_num)
 
     # Write the discussion data to a CSV file
-    canvas.write_discussion_data_to_csv(student_discussion_tuple[0], student_discussion_tuple[1])
+    canvas.write_discussion_data_to_csv(student_discussion_tuple[0],
+                                        student_discussion_tuple[1])
 
 
 if __name__ == '__main__':
