@@ -15,7 +15,7 @@ class JSONfreader:
 
     def load_json_file(self, json_file: str) -> dict:
         """
-        Loads Reddit credentials from an external JSON file.
+        Loads credentials from an external JSON file.
 
         Args:
             json_file (str): Path to the JSON file
@@ -25,7 +25,7 @@ class JSONfreader:
             error occurs.
 
         Notes:
-            If error occurs in opening the JSON file, the function raise a
+            If error occurs in opening the JSON file, the function raise an
             error exception for client/caller to handle.
         """
 
