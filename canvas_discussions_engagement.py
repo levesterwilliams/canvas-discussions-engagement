@@ -10,6 +10,7 @@ import csv
 import requests
 import json
 import sys
+import os
 from json import JSONDecodeError
 from pathlib import Path
 from json_freader import JSONfreader
@@ -20,8 +21,16 @@ class Canvas:
         self.instance = instance
 
     def get_token(self=None) -> dict:
+        environ_var = True
+        if environ_var:
+            return self.get_cred_env_var()
+        return self.get_cred_json()
+
+    def get_cred_json(self=None) -> dict:
         reader = JSONfreader()
-        json_file_path = "C:/Users/Levester/Desktop/cred.json"
+        # have to consult how the cred should be stored or if team has access to
+        # a secret manager
+        json_file_path = ""
         try:
             cred = reader.load_json_file(json_file_path)
         except FileNotFoundError as e:
@@ -29,13 +38,35 @@ class Canvas:
             # Must consult with others about whether the client should have
             # the ability to manually input the filepath to credential
             sys.exit(1)
-        except RuntimeError as e:
+        except RuntimeError:
             print(f"The credentials file cred.json contains invalid JSON.")
             sys.exit(1)
         except Exception as e:
             print(f"Unexpected error: {e}")
             sys.exit(1)
         return cred
+
+    def get_cred_env_var(self=None) -> dict:
+        try:
+            cred_json = os.getenv('CANVAS_API_CRED')
+            cred_json_clean = cred_json.strip().replace("'", '"')
+            print(cred_json_clean)
+            cred = json.loads(cred_json)
+        except AttributeError:
+            print(f"Environment variable CANVAS_API_CRED does not exist")
+            sys.exit(1)
+        except json.JSONDecodeError:
+            print(f"The credentials file cred.json contains invalid JSON.")
+            sys.exit(1)
+        except TypeError:
+            print("Invalid type: expected a JSON string.")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+            sys.exit(1)
+        return cred
+
+
 
     server_url = {'LPS_Production': 'https://canvas.upenn.edu/', 'LPS_Test':
         'https://upenn.test.instructure.com/'}
