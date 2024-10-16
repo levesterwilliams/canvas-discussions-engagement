@@ -17,19 +17,60 @@ from json_freader import JSONfreader
 
 
 class Canvas:
+    """This class reads data from a Canvas discussion engagements and prints
+    the data in a CSV format.
+
+    Attributes:
+    -----------
+    server_url : dict
+        A dictionary that contains information about the server url.
+
+    Methods:
+    --------
+    get_token():
+        Retrieves the API token.
+
+
+    """
+    server_url = {'LPS_Production': 'https://canvas.upenn.edu/', 'LPS_Test':
+        'https://upenn.test.instructure.com/'}
+
     def __init__(self, instance):
+        """Initializes the class with the server URL."""
         self.instance = instance
 
     def get_token(self=None) -> dict:
+        """Gets the API token from either an environment variable or a json
+        file.
+
+        Parameters:
+        -----------
+            self : none
+
+        Returns:
+        --------
+            dict : An API token.
+        """
         environ_var = True
         if environ_var:
             return self.get_cred_env_var()
         return self.get_cred_json()
 
     def get_cred_json(self=None) -> dict:
+        """
+        Retrieves an API token from a json file.
+
+        Parameters:
+        -----------
+        self : none
+
+        Returns:
+        --------
+        dict : An API token from either an environment variable or a json file.
+        """
         reader = JSONfreader()
-        # have to consult how the cred should be stored or if team has access to
-        # a secret manager
+        # have to inquire how the cred should be stored and if team has
+        # access to a secret manager
         json_file_path = ""
         try:
             cred = reader.load_json_file(json_file_path)
@@ -47,11 +88,18 @@ class Canvas:
         return cred
 
     def get_cred_env_var(self=None) -> dict:
+        """Gets the API token from an environment variable.
+
+        Parameters:
+        -----------
+        self : none
+
+        Returns:
+        --------
+        dict : An API token.
+        """
         try:
-            cred_json = os.getenv('CANVAS_API_CRED')
-            cred_json_clean = cred_json.strip().replace("'", '"')
-            print(cred_json_clean)
-            cred = json.loads(cred_json)
+            cred = json.loads(os.getenv('CANVAS_API_CRED'))
         except AttributeError:
             print(f"Environment variable CANVAS_API_CRED does not exist")
             sys.exit(1)
@@ -65,11 +113,6 @@ class Canvas:
             print(f"Unexpected error: {e}")
             sys.exit(1)
         return cred
-
-
-
-    server_url = {'LPS_Production': 'https://canvas.upenn.edu/', 'LPS_Test':
-        'https://upenn.test.instructure.com/'}
 
     def headers(self):
         token = self.get_token()
