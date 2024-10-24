@@ -170,6 +170,7 @@ class Canvas:
 
         for attempt in range(max_retries):
             response = requests.get(students_url, headers=self.headers())
+            #must consult to figure out how
             if response.status_code == 200:
                 try:
                     students = response.json()
@@ -179,13 +180,13 @@ class Canvas:
                     else:
                         print("Error: Unexpected API response format")
                         return []
-                except JSONDecodeError:
+                except json.JSONDecodeError:
                     print("Failed to decode JSON data from response")
                     return []
 
             elif response.status_code == 401:
                 print("Unauthorized: Check your API token or re-authenticate.")
-                # Add token refresh logic if applicable
+                # must consult to see if a refresh logic should be applied here
                 return []
 
             elif response.status_code == 404:
@@ -194,12 +195,11 @@ class Canvas:
                 return []
 
             elif response.status_code == 500:
-                print("Server error: Retrying request...")
-                time.sleep(retry_delay)  # Wait before retrying
+                print("Server error: Retrying request in {retry_delay} seconds...")
+                time.sleep(retry_delay)
                 retry_delay *= 10
 
             else:
-                # Handle other unexpected status codes
                 print(
                     f"Unexpected error ({response.status_code}): {response.text}")
                 return []
