@@ -11,6 +11,7 @@ import requests
 import json
 import sys
 import os
+import time
 from json import JSONDecodeError
 from pathlib import Path
 from json_freader import JSONfreader
@@ -67,6 +68,15 @@ class Canvas:
         Returns:
         --------
         dict : An API token from either an environment variable or a json file.
+
+        Raises:
+        -------
+        FileNotFoundError
+            If the file does not exist.
+        RuntimeError
+            If credentials are invalid.
+        Exception
+            If an error occurs.
         """
         reader = JSONfreader()
         # have to inquire how the cred should be stored and if team has
@@ -97,14 +107,25 @@ class Canvas:
         Returns:
         --------
         dict : An API token.
+
+        Raises:
+        -------
+        KeyError
+            If the key-value pair does not exist.
+        json.JSONDecodeError
+            If JSON is invalid.
+        TypeError
+            If type is not a JSON string
+        Exception
+            If an error occurs.
         """
         try:
             cred = json.loads(os.getenv('CANVAS_API_CRED'))
-        except AttributeError:
-            print(f"Environment variable CANVAS_API_CRED does not exist")
+        except KeyError:
+            print(f"Environment variable CANVAS_API_CRED does not exist.")
             sys.exit(1)
         except json.JSONDecodeError:
-            print(f"The credentials file cred.json contains invalid JSON.")
+            print(f"Contains invalid JSON.")
             sys.exit(1)
         except TypeError:
             print("Invalid type: expected a JSON string.")
@@ -114,44 +135,77 @@ class Canvas:
             sys.exit(1)
         return cred
 
-    def headers(self):
+    def headers(self) -> dict:
+        """Generates and returns a dictionary of HTTP headers to authenticate
+           and send JSON data in API requests.
+
+            Parameters:
+            -----------
+            self : none
+
+             Returns:
+            --------
+            dict : HTTP headers.
+        """
         token = self.get_token()
         headers = {'Content-Type': 'application/json',
                    'Authorization': 'Bearer {}'.format(
                        token[f'{self.instance}'])}
         return headers
 
-    # Retrieve students and test to see if the correct JSON object has been retrieved
-    def get_students(self, course_id):
-        # Fetch students enrolled in the course
+    def get_students(self, course_id : str) -> list:
+        """Gets students in course.
+
+        Parameters:
+        -----------
+        course_id (str) : ID of course.
+
+        Returns:
+        --------
+        list : List of dict containing student information.
+        """
         students_url = f'{self.server_url["LPS_Test"]}api/v1/courses/{course_id}/users?enrollemnt_type=student'
-        response = requests.get(students_url, headers=self.headers())
+        max_retries = 3
+        retry_delay = 2
 
-        # Error catching and handling for JSON
-        if response.status_code != 200:
-            raise Exception(f'{response.status_code},{response.text}')
+        for attempt in range(max_retries):
+            response = requests.get(students_url, headers=self.headers())
+            if response.status_code == 200:
+                try:
+                    students = response.json()
+                    if isinstance(students, list) and all(
+                            isinstance(student, dict) for student in students):
+                        return [student['name'] for student in students]
+                    else:
+                        print("Error: Unexpected API response format")
+                        return []
+                except JSONDecodeError:
+                    print("Failed to decode JSON data from response")
+                    return []
 
-        try:
-            students = response.json()
-        except JSONDecodeError:
-            print("Failed to decode data from response")
-            sys.exit(1)
+            elif response.status_code == 401:
+                print("Unauthorized: Check your API token or re-authenticate.")
+                # Add token refresh logic if applicable
+                return []
 
-        # Debugging statements
-        print("Course ID:", course_id)
-        print("Processed students data:", students)
-        print(type(students))
-        for student in students:
-            print(type(student))
-            print(student['name'])
+            elif response.status_code == 404:
+                print(
+                    f"Not Found: The course with ID {course_id} does not exist.")
+                return []
 
-        if isinstance(students, list) and all(
-                isinstance(student, dict) for student in students):
-            # need to return a list of dicts with name
-            return {student['name'] for student in students}
-        else:
-            print("Error: Unexpected API response format")
-            sys.exit(1)
+            elif response.status_code == 500:
+                print("Server error: Retrying request...")
+                time.sleep(retry_delay)  # Wait before retrying
+                retry_delay *= 10
+
+            else:
+                # Handle other unexpected status codes
+                print(
+                    f"Unexpected error ({response.status_code}): {response.text}")
+                return []
+
+        print("Max retries reached. Could not retrieve students data.")
+        return []
 
     def get_course_discussion_data(self, course_id):
         student_discussion_data = {}
@@ -314,30 +368,31 @@ class Canvas:
         print(f"CSV file written to {output_file_path}")
 
     # Retrieve course name
-    def get_course_name(self, course_id):
+    def get_course_name(self, course_id : str) -> str:
+        """Returns the name of the course.
+
+        Parameters:
+        -----------
+        course_id (str) : The id of the course.
+
+        Returns:
+        --------
+        str : The name of the course.
+        """
         course_url = f'{self.server_url[self.instance]}api/v1/courses/{course_id}'
-        print(f"Getting course name: {course_url}")
+        # print(f"Getting course name: {course_url}")
         response = requests.get(course_url, headers=self.headers())
         course = response.json()
         return course.get('name', 'Unknown Course')
 
 
 def main(course_num):
-    # Debugging statements
     course_name = canvas.get_course_name(course_num)
     print(f"Course Name: {course_name}")
-
-    # Return a set of student names
     students_in_course = canvas.get_students(course_num)
-    if len(students_in_course) == 0:
-        print("No students are listed in the course for Canvas.")
-        sys.exit(1)
-
-    # Get the discussion data for the course
-    student_discussion_tuple = canvas.get_course_discussion_data(course_num)
-
-    # Write the discussion data to a CSV file
-    canvas.write_discussion_data_to_csv(student_discussion_tuple[0],
+    if len(students_in_course) > 0:
+        student_discussion_tuple = canvas.get_course_discussion_data(course_num)
+        canvas.write_discussion_data_to_csv(student_discussion_tuple[0],
                                         student_discussion_tuple[1])
 
 
