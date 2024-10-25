@@ -139,13 +139,13 @@ class Canvas:
         """Generates and returns a dictionary of HTTP headers to authenticate
            and send JSON data in API requests.
 
-            Parameters:
-            -----------
-            self : none
+        Parameters:
+        -----------
+        self : none
 
-             Returns:
-            --------
-            dict : HTTP headers.
+        Returns:
+        --------
+        dict : HTTP headers.
         """
         token = self.get_token()
         headers = {'Content-Type': 'application/json',
@@ -153,7 +153,7 @@ class Canvas:
                        token[f'{self.instance}'])}
         return headers
 
-    def get_students(self, course_id : str) -> list:
+    def get_students(self, course_id: str) -> list[dict]:
         """Gets students in course.
 
         Parameters:
@@ -162,7 +162,8 @@ class Canvas:
 
         Returns:
         --------
-        list : List of dict containing student information.
+        list : List of dict containing student information or empty list if
+        HTTP error is encountered and not resolved.
         """
         students_url = f'{self.server_url["LPS_Test"]}api/v1/courses/{course_id}/users?enrollemnt_type=student'
         max_retries = 3
@@ -170,7 +171,6 @@ class Canvas:
 
         for attempt in range(max_retries):
             response = requests.get(students_url, headers=self.headers())
-            #must consult to figure out how
             if response.status_code == 200:
                 try:
                     students = response.json()
@@ -184,9 +184,10 @@ class Canvas:
                     print("Failed to decode JSON data from response")
                     return []
 
-            elif response.status_code == 401:
+            elif response.status_code == 401 or response.status_code == 404:
                 print("Unauthorized: Check your API token or re-authenticate.")
-                # must consult to see if a refresh logic should be applied here
+                # NOTE: must consult to see if a refresh logic should be
+                # applied here for 401 HTTP Error
                 return []
 
             elif response.status_code == 404:
@@ -197,7 +198,6 @@ class Canvas:
             elif response.status_code == 500:
                 print("Server error: Retrying request in {retry_delay} seconds...")
                 time.sleep(retry_delay)
-                retry_delay *= 10
 
             else:
                 print(
@@ -207,50 +207,89 @@ class Canvas:
         print("Max retries reached. Could not retrieve students data.")
         return []
 
-    def get_course_discussion_data(self, course_id):
+    def get_next_page_url(self, link_header: str) -> str:
+        """Gets the next page URI for the discussion page.
+
+        Parameters
+        ----------
+        link_header (str) : Header for the next URI for the discussion page.
+
+        Returns
+        -------
+        str : URI for the next page.
+        """
+        if link_header:
+            links = link_header.split(',')
+            for link in links:
+                if 'rel="next"' in link:
+                    next_link = link.split(';')[0].strip('<> ')
+                    return next_link
+        return None
+
+    def get_course_discussion_data(self, course_id: str) -> list[dict]:
         student_discussion_data = {}
-        page_url = f'{self.server_url[self.instance]}api/v1/courses/{course_id}/discussion_topics?per_page=100'
-
-        # Debug page_url
-        print("Page URL:", page_url)
-
+        page_url = (f'{self.server_url[self.instance]}api/v1/courses/'
+                    f'{course_id}/discussion_topics?per_page=10')
+        #print("Page URL:", page_url)
         while page_url:
             response = requests.get(page_url, headers=self.headers())
-            if response.status_code != 200:
-                raise Exception(f'{response.status_code},{response.text}')
+            if response.status_code == 200:
+                try:
+                    discussion_topics = response.json()
+                    print("Discussion topics:", discussion_topics)
+                    list_topic_titles = []
+                    for topic in discussion_topics:
+                        topic_title = topic.get('title', 'Unknown Title')
+                        topic_id = topic.get('id', 'Unknown')
+                        print(f"Topic title is: {topic_title}")
+                        original_topic_title = self.process_discussion_topic(
+                            topic,
+                            course_id,
+                            student_discussion_data)
+                        replies_topic_titles = self.process_full_topic_view(
+                            course_id,
+                            topic_id,
+                            student_discussion_data,
+                            topic_title)
+                        # Appends titles to list
+                        if original_topic_title:
+                            list_topic_titles.append(original_topic_title[0])
+                        if replies_topic_titles:
+                            list_topic_titles.extend(replies_topic_titles)
+                except json.JSONDecodeError:
+                    print("Failed to decode JSON data from response")
+                    return []
+            elif response.status_code == 401:
+                print("Unauthorized: Check your API token or re-authenticate.")
+                # NOTE: must consult to see if a refresh logic should be
+                # applied here
+                return []
+            elif response.status_code == 404:
+                print(
+                    f"Not Found: Page {page_url} does not exist.")
+                return []
 
-            try:
-                discussion_topics = response.json()
-            except JSONDecodeError:
-                print("Failed to decode JSON from response")
-                sys.exit(1)
+            elif response.status_code == 500:
+                print(
+                    "Server error: Retrying request in {retry_delay} seconds...")
+                time.sleep(retry_delay)
 
-            print("Discussion topics:", discussion_topics)
-            list_topic_titles = []
-            for topic in discussion_topics:
-                topic_title = topic.get('title', 'Unknown Title')
-                topic_id = topic.get('id', 'Unknown')
-                print(f"Topic title is: {topic_title}")
-                original_topic_title = self.process_discussion_topic(topic,
-                                                                     course_id,
-                                                                     student_discussion_data)
-                replies_topic_titles = self.process_full_topic_view(course_id,
-                                                                    topic_id,
-                                                                    student_discussion_data,
-                                                                    topic_title)
-                # Appends titles to list
-                if original_topic_title:
-                    list_topic_titles.append(original_topic_title[0])
-                if replies_topic_titles:
-                    list_topic_titles.extend(replies_topic_titles)
-            page_url = self.get_next_page_url(response.headers.get('Link'))
+            else:
+                print(
+                    f"Unexpected error ({response.status_code}): {response.text}")
+                return []
+            page_url = self.get_next_page_url(
+                response.headers.get('Link'))
+            
 
         print(f"Student discussion is {student_discussion_data}")
         print(f"Topic titles are {list_topic_titles}")
         return student_discussion_data, list_topic_titles
 
     def get_full_topic_view(self, course_id, topic_id):
-        full_topic_view_url = f'{self.server_url[self.instance]}/api/v1/courses/{course_id}/discussion_topics/{topic_id}/view'
+        full_topic_view_url = (f'{self.server_url[self.instance]}/api/v1/'
+                               f'courses/{course_id}/discussion_topics/'
+                               f'{topic_id}/view')
         response = requests.get(full_topic_view_url, headers=self.headers())
         if response.status_code == 200:
             try:
@@ -258,7 +297,7 @@ class Canvas:
                 return full_topic_view
             except JSONDecodeError:
                 print("Failed to decode JSON from response")
-                sys.exit(1)
+                return None
         elif response.status_code == 403:
             # skip over as topic requires user to have posted
             return None
@@ -267,7 +306,8 @@ class Canvas:
         # again
         else:
             print(
-                f"Error fetching full topic view: {response.status_code}, {response.text}")
+                f"Error fetching full topic view: {response.status_code},"
+                f" {response.text}")
             return None
 
     def process_full_topic_view(self, course_id, topic_id,
@@ -294,22 +334,34 @@ class Canvas:
         print(f'Topic replies in full_view is{list_topic_titles}')
         return list_topic_titles
 
-    def process_discussion_topic(self, topic, course_id,
-                                 student_discussion_data):
-        discussion_post_url = f'{self.server_url[self.instance]}api/v1/courses/{course_id}/discussion_topics/{topic["id"]}'
+    def process_discussion_topic(self, topic, course_id: str,
+                                 student_discussion_data: dict) -> list:
+        """Processes discussion topic by getting all participants of the topics
+        and adding them to the appropriate topic list.
+
+        Parameters
+        ----------
+        topic (str): Topic name.
+        course_id (str): Course id.
+        student_discussion_data (dict): Student discussion data.
+
+        Returns
+        -------
+        list: List of participants of the topic
+        """
+        discussion_post_url = (f'{self.server_url[self.instance]}api/v1/courses/'
+                               f'{course_id}/discussion_topics/{topic["id"]}')
         response = requests.get(discussion_post_url, headers=self.headers())
         if response.status_code != 200:
             print(f"Error fetching discussion posts: {response.status_code}")
             return []
-
         try:
             discussion_post = response.json()
         except json.JSONDecodeError:
             print("Failed to decode JSON from discussion posts response")
-            sys.exit(1)
+            return []
 
         list_topic_titles = []
-
         print(f"Discussion post is: {discussion_post}")
         student_name = discussion_post.get('user_name')
         print(f"Author Name: {student_name}")
@@ -324,15 +376,6 @@ class Canvas:
                 list_topic_titles.append(topic_title)
                 print(f'New topic title is {topic_title}')
         return list_topic_titles
-
-    def get_next_page_url(self, link_header):
-        if link_header:
-            links = link_header.split(',')
-            for link in links:
-                if 'rel="next"' in link:
-                    next_link = link.split(';')[0].strip('<> ')
-                    return next_link
-        return None
 
     def write_discussion_data_to_csv(self, student_discussion_data,
                                      discussion_topics):
