@@ -15,6 +15,7 @@ import time
 from json import JSONDecodeError
 from pathlib import Path
 from json_freader import JSONfreader
+from collections import OrderedDict
 
 
 class Canvas:
@@ -173,59 +174,85 @@ class Canvas:
         return headers
 
     def get_students(self, course_id: str) -> list[dict]:
-        """Gets students in course.
+        """Gets only student enrollments in the course using the Enrollments API.
 
         Parameters:
         -----------
-        course_id (str) : ID of course.
+        course_id (str) : ID of the course.
 
         Returns:
         --------
-        list : List of dict containing student information or empty list if
-        HTTP error is encountered and not resolved.
+        list : List of dicts containing only sortable names of students
+        enrolled in the
+        course, or an empty list if no students are found or an error occurs.
         """
-        students_url = (f'{self.get_server_url()}api/v1/courses/'
-                        f'{course_id}/users?enrollemnt_type=student')
+        # Adjusted URL to use the Enrollments API
+        enrollments_url = (
+            f'{self.get_server_url()}api/v1/courses/{course_id}/enrollments?'
+            'type[]=StudentEnrollment&per_page=100')
         max_retries = 3
         retry_delay = 2
 
-        for attempt in range(max_retries):
-            response = requests.get(students_url, headers=self.headers())
-            if response.status_code == 200:
-                try:
-                    students = response.json()
-                    if isinstance(students, list) and all(
-                            isinstance(student, dict) for student in students):
-                        return [student['name'] for student in students]
-                    else:
-                        print("Error: Unexpected API response format")
+        enrollments = []
+        page_url = enrollments_url
+
+        while page_url:
+            for attempt in range(max_retries):
+                response = requests.get(page_url, headers=self.headers())
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                        if isinstance(data, list) and all(
+                                isinstance(enrollment, dict) for enrollment in
+                                data):
+                            student_enrollments = [
+                                enrollment for enrollment in data
+                                if enrollment.get('type') == 'StudentEnrollment'
+                            ]
+                            enrollments.extend([enrollment.get('user',
+                                                               {}).get(
+                                'sortable_name', 'Unknown').strip(" ") for
+                                                enrollment in
+                                                   student_enrollments])
+
+                            page_url = self.get_next_page_url(
+                                response.headers.get('Link'))
+                            break  # Exit the retry loop on success
+
+                        else:
+                            print("Error: Unexpected API response format")
+                            return []
+
+                    except JSONDecodeError:
+                        print("Failed to decode JSON data from response")
                         return []
-                except json.JSONDecodeError:
-                    print("Failed to decode JSON data from response")
+
+                elif response.status_code in {401, 403}:
+                    print(
+                        "Unauthorized: Check your API token or re-authenticate.")
                     return []
 
-            elif response.status_code == 401 or response.status_code == 403:
-                print("Unauthorized: Check your API token or re-authenticate.")
-                # NOTE: must consult to see if a refresh logic should be
-                # applied here for 401 HTTP Error
-                return []
+                elif response.status_code == 404:
+                    print(
+                        f"Not Found: The course with ID {course_id} does not exist.")
+                    return []
 
-            elif response.status_code == 404:
+                elif response.status_code == 500:
+                    print(
+                        f"Server error: Retrying request in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+
+                else:
+                    print(
+                        f"Unexpected error ({response.status_code}): {response.text}")
+                    return []
+
+            if response.status_code != 200:
                 print(
-                    f"Not Found: The course with ID {course_id} does not exist.")
+                    "Max retries reached. Could not retrieve enrollment data.")
                 return []
-
-            elif response.status_code == 500:
-                print("Server error: Retrying request in {retry_delay} seconds...")
-                time.sleep(retry_delay)
-
-            else:
-                print(
-                    f"Unexpected error ({response.status_code}): {response.text}")
-                return []
-
-        print("Max retries reached. Could not retrieve students data.")
-        return []
+        print(f"Enrollments is {enrollments}")
+        return enrollments
 
     def get_next_page_url(self, link_header: str) -> str:
         """Gets the next page URI for the discussion page.
@@ -246,7 +273,9 @@ class Canvas:
                     return next_link
         return ""
 
-    def get_course_discussion_data(self, course_id: str) -> tuple[dict, list]:
+    def get_course_discussion_data(self, course_id: str, students_in_course:
+    list[str])\
+            -> tuple[dict, list]:
         """Gets the discussion data for the given course.
 
         Parameters
@@ -273,11 +302,11 @@ class Canvas:
                         topic_title = topic.get('title', 'Unknown Title')
                         topic_id = topic.get('id', 'Unknown')
                         print(f"Topic title is: {topic_title}")
-                        topic_titles = self.process_full_topic_view(
+                        self.process_full_topic_view(
                             course_id,
                             topic_id,
                             student_discussion_data,
-                            topic_title)
+                            topic_title, students_in_course)
                         list_topic_titles.append(topic_title)
                 except json.JSONDecodeError:
                     print("Failed to decode JSON data from response")
@@ -303,9 +332,12 @@ class Canvas:
                 return {}, []
 
             page_url = self.get_next_page_url(response.headers.get('Link'))
+
         print(f"Student discussion is {student_discussion_data}")
         print(f"Topic titles are {list_topic_titles}")
-        return student_discussion_data, list_topic_titles
+        ordered_by_student_name = OrderedDict(sorted(
+            student_discussion_data.items()))
+        return ordered_by_student_name, list_topic_titles
 
     def get_full_topic_view(self, course_id: str, topic_id: str) -> dict:
         full_topic_view_url = (f'{self.get_server_url()}/api/v1/'
@@ -332,25 +364,50 @@ class Canvas:
             return {}
 
     def process_full_topic_view(self, course_id: str, topic_id: str,
-                                student_discussion_data: dict, topic_title:
-            str) -> list:
+                                student_discussion_data: dict, topic_title: str,
+                                enrolled_student_names: list[str]) -> list:
+        """
+        Processes the full topic view for a given course and topic, filtering participants
+        based on enrolled students with StudentEnrollment.
+
+        Parameters
+        ----------
+        course_id (str): ID of the course.
+        topic_id (str): ID of the discussion topic.
+        student_discussion_data (dict): Dictionary containing discussion data for students.
+        topic_title (str): Title of the discussion topic.
+        enrolled_student_names (list): List of sortable names of students with StudentEnrollment.
+
+        Returns
+        -------
+        list : List of topic titles for the processed students.
+        """
         topic_view = self.get_full_topic_view(course_id, topic_id)
         if not topic_view:
             return []
-        list_topic_titles = []
-        # student_discussion_data' is structured as
-        # {student_id: {topic_title: True/False for replies}}
-        # changing to {"student_id": [topic_one, topic_two, ...],
-        # "student_id2": ...}
-        for entry in topic_view.get('participants', []):  # Iterate through all
-            # entries
-            student_name = entry.get('display_name')
-            if student_name not in student_discussion_data:
-                student_discussion_data[student_name] = [topic_title]
-            else:
-                student_discussion_data[student_name].append(topic_title)
-            list_topic_titles.append(topic_title)
 
+        list_topic_titles = []
+
+        # Iterate through all participants in the topic view
+        for entry in topic_view.get('participants', []):
+            participant_name = entry.get('display_name', '')
+
+            # Convert 'First Last' format to 'Last, First' to match sortable names
+            name_parts = participant_name.split()
+            if len(name_parts) > 1:
+                transformed_name = f"{name_parts[-1]}, {' '.join(name_parts[:-1])}"
+            else:
+                transformed_name = participant_name
+
+            # Filter out users who are not in the list of enrolled student names
+            if transformed_name in enrolled_student_names:
+                if transformed_name not in student_discussion_data:
+                    student_discussion_data[transformed_name] = [topic_title]
+                else:
+                    student_discussion_data[transformed_name].append(
+                        topic_title)
+
+                list_topic_titles.append(topic_title)
         return list_topic_titles
 
     def write_discussion_data_to_csv(self, student_discussion_data: dict,
@@ -420,7 +477,8 @@ def main(course_num: str) -> None:
     print(f"Course Name: {course_name}")
     students_in_course = canvas.get_students(course_num)
     if len(students_in_course) > 0:
-        student_discussion_tuple = canvas.get_course_discussion_data(course_num)
+        student_discussion_tuple = canvas.get_course_discussion_data(
+            course_num, students_in_course)
         if student_discussion_tuple[0] and student_discussion_tuple[1]:
             canvas.write_discussion_data_to_csv(student_discussion_tuple[0],
                                         student_discussion_tuple[1])
