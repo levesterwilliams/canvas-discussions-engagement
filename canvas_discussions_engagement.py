@@ -18,8 +18,8 @@ from json_freader import JSONfreader
 
 
 class Canvas:
-    """This class reads data from a Canvas discussion engagements and prints
-    the data in a CSV format.
+    """This class reads data from a course's Canvas discussion engagements and
+    prints the data in a CSV format.
 
     Attributes:
     -----------
@@ -28,17 +28,36 @@ class Canvas:
 
     Methods:
     --------
+    get_server_url():
+        Retrieves the server url.
+
     get_token():
         Retrieves the API token.
+
+    get_cred_json():
+        Retrieves an API token from a json file.
+
+    get_cred_env_var():
+        Retrieves an API token from an environment variable.
+
 
 
     """
     server_url = {'LPS_Production': 'https://canvas.upenn.edu/', 'LPS_Test':
         'https://upenn.test.instructure.com/'}
 
-    def __init__(self, instance):
-        """Initializes the class with the server URL."""
-        self.instance = instance
+    def __init__(self, server_type):
+        """Initializes the class with the server type."""
+        self.server_type = server_type
+
+    def get_server_url(self=None) -> str:
+        """Returns the server url.
+
+        Returns
+        -------
+        str : A string representing the server url.
+        """
+        return self.server_url[self.server_type]
 
     def get_token(self=None) -> dict:
         """Gets the API token from either an environment variable or a json
@@ -46,11 +65,11 @@ class Canvas:
 
         Parameters:
         -----------
-            self : none
+        self : none
 
         Returns:
         --------
-            dict : An API token.
+        dict : An API token.
         """
         environ_var = True
         if environ_var:
@@ -150,7 +169,7 @@ class Canvas:
         token = self.get_token()
         headers = {'Content-Type': 'application/json',
                    'Authorization': 'Bearer {}'.format(
-                       token[f'{self.instance}'])}
+                       token[self.server_type])}
         return headers
 
     def get_students(self, course_id: str) -> list[dict]:
@@ -165,7 +184,7 @@ class Canvas:
         list : List of dict containing student information or empty list if
         HTTP error is encountered and not resolved.
         """
-        students_url = (f'{self.server_url["LPS_Test"]}api/v1/courses/'
+        students_url = (f'{self.get_server_url()}api/v1/courses/'
                         f'{course_id}/users?enrollemnt_type=student')
         max_retries = 3
         retry_delay = 2
@@ -185,7 +204,7 @@ class Canvas:
                     print("Failed to decode JSON data from response")
                     return []
 
-            elif response.status_code == 401 or response.status_code == 404:
+            elif response.status_code == 401 or response.status_code == 403:
                 print("Unauthorized: Check your API token or re-authenticate.")
                 # NOTE: must consult to see if a refresh logic should be
                 # applied here for 401 HTTP Error
@@ -241,7 +260,7 @@ class Canvas:
         discussion topics.
         """
         student_discussion_data = {}
-        page_url = (f'{self.server_url[self.instance]}api/v1/courses/'
+        page_url = (f'{self.get_server_url()}api/v1/courses/'
                     f'{course_id}/discussion_topics?per_page=10')
         list_topic_titles = []
         while page_url:
@@ -289,7 +308,7 @@ class Canvas:
         return student_discussion_data, list_topic_titles
 
     def get_full_topic_view(self, course_id: str, topic_id: str) -> dict:
-        full_topic_view_url = (f'{self.server_url[self.instance]}/api/v1/'
+        full_topic_view_url = (f'{self.get_server_url()}/api/v1/'
                                f'courses/{course_id}/discussion_topics/'
                                f'{topic_id}/view')
         response = requests.get(full_topic_view_url, headers=self.headers())
@@ -341,7 +360,7 @@ class Canvas:
 
         Parameters
         ----------
-        student_discussion_data (dict): Student participation of discussion
+        student_discussion_data (dict) : Student participation of discussion
         topics.
 
         discussion_titles (list): List of discussion topics.
@@ -390,7 +409,7 @@ class Canvas:
         --------
         str : The name of the course.
         """
-        course_url = f'{self.server_url[self.instance]}api/v1/courses/{course_id}'
+        course_url = f'{self.get_server_url()}api/v1/courses/{course_id}'
         response = requests.get(course_url, headers=self.headers())
         course = response.json()
         return course.get('name', 'Unknown Course')
@@ -405,8 +424,8 @@ def main(course_num: str) -> None:
         if student_discussion_tuple[0] and student_discussion_tuple[1]:
             canvas.write_discussion_data_to_csv(student_discussion_tuple[0],
                                         student_discussion_tuple[1])
-    else:
-        print(f"No CSV written for {course_name}")
+            return None
+    print(f"No CSV written for {course_name}")
 
 
 if __name__ == '__main__':
