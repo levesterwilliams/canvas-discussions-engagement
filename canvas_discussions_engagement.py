@@ -41,13 +41,34 @@ class Canvas:
     get_cred_env_var():
         Retrieves an API token from an environment variable.
 
+    headers():
+        Generates HTTP headers.
 
+    get_students():
+        Gets students enrolled in the course.
 
+    get_next_page_url():
+        Gets the next page URI for the discussion page.
+
+    get_course_discussion_data():
+        Gets the discussion data for the given course.
+
+    get_full_topic_view():
+        Gets the full topic for each discussion topic.
+
+    process_full_topic_view():
+        Stores what discussion topic students replied to.
+
+    write_discussion_data_to_csv():
+        Writes student participation of each discussion to a CSV file.
+
+    get_course_name():
+        Returns the name of the course.
     """
     server_url = {'LPS_Production': 'https://canvas.upenn.edu/', 'LPS_Test':
         'https://upenn.test.instructure.com/'}
 
-    def __init__(self, server_type):
+    def __init__(self, server_type: str) -> None:
         """Initializes the class with the server type."""
         self.server_type = server_type
 
@@ -71,6 +92,9 @@ class Canvas:
         Returns:
         --------
         dict : An API token.
+
+        Note: Environment variable is automatically turned on. Need more
+        clarification on the running environment of this script.
         """
         environ_var = True
         if environ_var:
@@ -156,8 +180,8 @@ class Canvas:
         return cred
 
     def headers(self) -> dict:
-        """Generates and returns a dictionary of HTTP headers to authenticate
-           and send JSON data in API requests.
+        """Generates and returns HTTP headers to send JSON data and
+        authentication for API calls.
 
         Parameters:
         -----------
@@ -186,7 +210,6 @@ class Canvas:
         enrolled in the
         course, or an empty list if no students are found or an error occurs.
         """
-        # Adjusted URL to use the Enrollments API
         enrollments_url = (
             f'{self.get_server_url()}api/v1/courses/{course_id}/enrollments?'
             'type[]=StudentEnrollment&per_page=100')
@@ -214,7 +237,6 @@ class Canvas:
                                 'sortable_name', 'Unknown').strip(" ") for
                                                 enrollment in
                                                    student_enrollments])
-
                             page_url = self.get_next_page_url(
                                 response.headers.get('Link'))
                             break  # Exit the retry loop on success
@@ -274,8 +296,7 @@ class Canvas:
         return ""
 
     def get_course_discussion_data(self, course_id: str, students_in_course:
-    list[str])\
-            -> tuple[dict, list]:
+    list[str]) -> tuple[dict, list]:
         """Gets the discussion data for the given course.
 
         Parameters
@@ -285,7 +306,7 @@ class Canvas:
         Returns
         -------
         tuple[dict, list] : Returns a tuple containing the dict of student
-        names as keys and a list of courses as values and a list of
+        names as keys and a list of their courses as values; and a list of
         discussion topics.
         """
         student_discussion_data = {}
@@ -340,6 +361,18 @@ class Canvas:
         return ordered_by_student_name, list_topic_titles
 
     def get_full_topic_view(self, course_id: str, topic_id: str) -> dict:
+        """Gets the full topic for each discussion topic, which included
+           threaded responses.
+
+        Parameters
+        ---------
+        course_id (str) : ID for the course.
+        topic_id (str) : ID for the discussion topic.
+
+        Returns
+        -------
+        dict : Data associated with the topic discussion.
+        """
         full_topic_view_url = (f'{self.get_server_url()}/api/v1/'
                                f'courses/{course_id}/discussion_topics/'
                                f'{topic_id}/view')
@@ -373,10 +406,15 @@ class Canvas:
         Parameters
         ----------
         course_id (str): ID of the course.
+
         topic_id (str): ID of the discussion topic.
-        student_discussion_data (dict): Dictionary containing discussion data for students.
+
+        student_discussion_data (dict): Dictionary containing discussion data
+        for students.
+
         topic_title (str): Title of the discussion topic.
-        enrolled_student_names (list): List of sortable names of students with StudentEnrollment.
+        enrolled_student_names (list): List of sortable names of students with
+        StudentEnrollment.
 
         Returns
         -------
@@ -395,7 +433,7 @@ class Canvas:
             # Convert 'First Last' format to 'Last, First' to match sortable names
             name_parts = participant_name.split()
             if len(name_parts) > 1:
-                transformed_name = f"{name_parts[-1]}, {' '.join(name_parts[:-1])}"
+                transformed_name = f"{' '.join(name_parts[1:])}, {name_parts[0]}"
             else:
                 transformed_name = participant_name
 
@@ -488,5 +526,6 @@ def main(course_num: str) -> None:
 
 if __name__ == '__main__':
     canvas = Canvas('LPS_Test')
-    course_number = '1748632'
+    #course_number = '1748632'
+    course_number = "1645103"
     main(course_number)
