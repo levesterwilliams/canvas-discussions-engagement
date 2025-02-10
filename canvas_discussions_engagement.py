@@ -68,9 +68,13 @@ class Canvas:
     server_url = {'LPS_Production': 'https://canvas.upenn.edu/', 'LPS_Test':
         'https://upenn.test.instructure.com/'}
 
-    def __init__(self, server_type: str) -> None:
+    enrollment_type = {'Student': 'StudentEnrollment', 'TA': 'TaEnrollment',
+                       'Teacher': 'TeacherEnrollment'}
+
+    def __init__(self, server_type: str, enrollment: str) -> None:
         """Initializes the class with the server type."""
         self.server_type = server_type
+        self.enrollment = enrollment
 
     def get_server_url(self=None) -> str:
         """Returns the server url.
@@ -80,6 +84,15 @@ class Canvas:
         str : A string representing the server url.
         """
         return self.server_url[self.server_type]
+
+    def get_enrollment_type(self=None) -> str:
+        """Returns the Enrollment type.
+
+        Returns
+        -------
+        str : A string representing the Enrollment type.
+        """
+        return self.enrollment_type[self.enrollment]
 
     def get_token(self=None) -> dict:
         """Gets the API token from either an environment variable or a json
@@ -211,8 +224,9 @@ class Canvas:
         course, or an empty list if no students are found or an error occurs.
         """
         enrollments_url = (
-            f'{self.get_server_url()}api/v1/courses/{course_id}/enrollments?'
-            'type[]=StudentEnrollment&per_page=100')
+            f'{self.get_server_url()}api/v1/courses/{course_id}/enrollments'
+            f'?type[]={self.get_enrollment_type()}&per_page=100')
+        print(enrollments_url)
         max_retries = 3
         retry_delay = 2
 
@@ -230,13 +244,14 @@ class Canvas:
                                 data):
                             student_enrollments = [
                                 enrollment for enrollment in data
-                                if enrollment.get('type') == 'StudentEnrollment'
+                                if enrollment.get('type') ==
+                                   self.get_enrollment_type()
                             ]
                             enrollments.extend([enrollment.get('user',
                                                                {}).get(
                                 'sortable_name', 'Unknown').strip(" ") for
                                                 enrollment in
-                                                   student_enrollments])
+                                                student_enrollments])
                             page_url = self.get_next_page_url(
                                 response.headers.get('Link'))
                             break  # Exit the retry loop on success
@@ -295,9 +310,10 @@ class Canvas:
                     return next_link
         return ""
 
-    def get_course_discussion_data(self, course_id: str, students_in_course:
-    list[str]) -> tuple[dict, list]:
-        """Gets the discussion data for the given course.
+    def get_course_discussion_data(self, course_id: str,
+                                   students_in_course: list[str]) -> tuple[
+        dict, list]:
+        """Gets the discussion data for the given course, sorted by the date they were posted.
 
         Parameters
         ---------
@@ -307,57 +323,50 @@ class Canvas:
         -------
         tuple[dict, list] : Returns a tuple containing the dict of student
         names as keys and a list of their courses as values; and a list of
-        discussion topics.
+        discussion topics sorted by posting date.
         """
         student_discussion_data = {}
-        page_url = (f'{self.get_server_url()}api/v1/courses/'
-                    f'{course_id}/discussion_topics?per_page=10')
-        list_topic_titles = []
+        page_url = (
+            f'{self.get_server_url()}api/v1/courses/{course_id}/discussion_topics?per_page=10')
+        discussions = []
+
         while page_url:
             response = requests.get(page_url, headers=self.headers())
             if response.status_code == 200:
                 try:
                     discussion_topics = response.json()
-                    print("Discussion topics:", discussion_topics)
                     for topic in discussion_topics:
                         topic_title = topic.get('title', 'Unknown Title')
                         topic_id = topic.get('id', 'Unknown')
-                        print(f"Topic title is: {topic_title}")
-                        self.process_full_topic_view(
-                            course_id,
-                            topic_id,
-                            student_discussion_data,
-                            topic_title, students_in_course)
-                        list_topic_titles.append(topic_title)
+                        topic_posted_date = topic.get('posted_at',
+                                                      '')  # Fetch the posting date
+                        discussions.append((
+                            topic_posted_date if topic_posted_date else '1900-01-01T00:00:00Z',
+                            topic_id, topic_title))
+
+                    page_url = self.get_next_page_url(
+                        response.headers.get('Link'))
                 except json.JSONDecodeError:
                     print("Failed to decode JSON data from response")
                     return {}, []
-            elif response.status_code == 401:
-                print("Unauthorized: Check your API token or re-authenticate.")
-                # NOTE: must consult to see if a refresh logic should be
-                # applied here
-                return {}, []
-            elif response.status_code == 404:
-                print(
-                    f"Not Found: Page {page_url} does not exist.")
-                return {}, []
-
-            elif response.status_code == 500:
-                print(
-                    "Server error: Retrying request in {retry_delay} seconds...")
-                return {}, []
-
             else:
-                print(f"Unexpected error ({response.status_code}):"
-                      f" {response.text}")
-                return {}, []
+                print(
+                    f"Unexpected error ({response.status_code}): {response.text}")
+                page_url = None  # Ensure loop exit on error
 
-            page_url = self.get_next_page_url(response.headers.get('Link'))
+        # Sort discussions by the posting date
+        discussions.sort(key=lambda x: x[
+            0])  # Sort using the first element of each tuple (date)
+        list_topic_titles = [title for _, _, title in
+                             discussions]  # Unpack sorted topics
 
-        print(f"Student discussion is {student_discussion_data}")
-        print(f"Topic titles are {list_topic_titles}")
-        ordered_by_student_name = OrderedDict(sorted(
-            student_discussion_data.items()))
+        for _, topic_id, topic_title in discussions:
+            self.process_full_topic_view(course_id, topic_id,
+                                         student_discussion_data, topic_title,
+                                         students_in_course)
+
+        ordered_by_student_name = OrderedDict(
+            sorted(student_discussion_data.items()))
         return ordered_by_student_name, list_topic_titles
 
     def get_full_topic_view(self, course_id: str, topic_id: str) -> dict:
@@ -477,7 +486,7 @@ class Canvas:
             download_folder.mkdir()
             print(f"Created folder: {download_folder}")
         output_file_path = download_folder / 'discusssion_data.csv'
-        headers = ['Student Name'] + discussion_titles
+        headers = ['Name'] + discussion_titles
         print(f'Header titles: {headers}')
 
         with (open(output_file_path, 'w', newline='') as csvfile):
@@ -493,7 +502,7 @@ class Canvas:
         print(f"CSV file written to {output_file_path}")
 
     # Retrieve course name
-    def get_course_name(self, course_id : str) -> str:
+    def get_course_name(self, course_id: str) -> str:
         """Returns the name of the course.
 
         Parameters:
@@ -514,18 +523,20 @@ def main(course_num: str) -> None:
     course_name = canvas.get_course_name(course_num)
     print(f"Course Name: {course_name}")
     students_in_course = canvas.get_students(course_num)
+    print(f"students_in_course: {students_in_course}")
     if len(students_in_course) > 0:
         student_discussion_tuple = canvas.get_course_discussion_data(
             course_num, students_in_course)
         if student_discussion_tuple[0] and student_discussion_tuple[1]:
             canvas.write_discussion_data_to_csv(student_discussion_tuple[0],
-                                        student_discussion_tuple[1])
+                                                student_discussion_tuple[1])
             return None
     print(f"No CSV written for {course_name}")
 
 
 if __name__ == '__main__':
-    canvas = Canvas('LPS_Test')
-    #course_number = '1748632'
+    # need clarity if command-line request for enrollment_type
+    canvas = Canvas('LPS_Test', 'TA')
+    # course_number = '1748632'
     course_number = "1645103"
     main(course_number)
