@@ -44,8 +44,11 @@ class Canvas:
     headers():
         Generates HTTP headers.
 
-    get_students():
-        Gets students enrolled in the course.
+    get_enrollees():
+        Gets enrollees enrolled in the course.
+
+    set_enrollment_type():
+        Sets the Enrollment type
 
     get_next_page_url():
         Gets the next page URI for the discussion page.
@@ -92,6 +95,16 @@ class Canvas:
         -------
         str : A string representing the Enrollment type.
         """
+        return self.enrollment_type[self.enrollment]
+
+    def set_enrollment_type(self, enrollment_type: str) -> str:
+        """Sets the Enrollment type
+
+        Returns
+        -------
+        str : A string representing the Enrollment type.
+        """
+        self.enrollment = enrollment_type
         return self.enrollment_type[self.enrollment]
 
     def get_token(self=None) -> dict:
@@ -210,7 +223,7 @@ class Canvas:
                        token[self.server_type])}
         return headers
 
-    def get_students(self, course_id: str) -> list[dict]:
+    def get_enrollees(self, course_id: str) -> list[dict]:
         """Gets only student enrollments in the course using the Enrollments API.
 
         Parameters:
@@ -311,7 +324,7 @@ class Canvas:
         return ""
 
     def get_course_discussion_data(self, course_id: str,
-                                   students_in_course: list[str]) -> tuple[
+                                   enrollees_in_course: list[str]) -> tuple[
         dict, list]:
         """Gets the discussion data for the given course, sorted by the date they were posted.
 
@@ -338,7 +351,7 @@ class Canvas:
                     for topic in discussion_topics:
                         topic_title = topic.get('title', 'Unknown Title')
                         topic_id = topic.get('id', 'Unknown')
-                        topic_posted_date = topic.get('posted_at',
+                        topic_posted_date = topic.get('last_reply_at',
                                                       '')  # Fetch the posting date
                         discussions.append((
                             topic_posted_date if topic_posted_date else '1900-01-01T00:00:00Z',
@@ -363,7 +376,7 @@ class Canvas:
         for _, topic_id, topic_title in discussions:
             self.process_full_topic_view(course_id, topic_id,
                                          student_discussion_data, topic_title,
-                                         students_in_course)
+                                         enrollees_in_course)
 
         ordered_by_student_name = OrderedDict(
             sorted(student_discussion_data.items()))
@@ -487,7 +500,6 @@ class Canvas:
             print(f"Created folder: {download_folder}")
         output_file_path = download_folder / 'discusssion_data.csv'
         headers = ['Name'] + discussion_titles
-        print(f'Header titles: {headers}')
 
         with (open(output_file_path, 'w', newline='') as csvfile):
             writer = csv.writer(csvfile)
@@ -520,13 +532,21 @@ class Canvas:
 
 
 def main(course_num: str) -> None:
+
     course_name = canvas.get_course_name(course_num)
     print(f"Course Name: {course_name}")
-    students_in_course = canvas.get_students(course_num)
-    print(f"students_in_course: {students_in_course}")
-    if len(students_in_course) > 0:
+    course_enrollees = canvas.get_enrollees(course_num)
+    if canvas.get_enrollment_type() != 'StudentEnrollment':
+        if canvas.get_enrollment_type() == 'TaEnrollment':
+            canvas.set_enrollment_type('Teacher')
+        else:
+            canvas.set_enrollment_type('TA')
+        course_enrollees_addt = canvas.get_enrollees(course_num)
+        course_enrollees = course_enrollees + course_enrollees_addt
+    print(f"Enrollees_in_course: {course_enrollees}")
+    if len(course_enrollees) > 0:
         student_discussion_tuple = canvas.get_course_discussion_data(
-            course_num, students_in_course)
+            course_num, course_enrollees)
         if student_discussion_tuple[0] and student_discussion_tuple[1]:
             canvas.write_discussion_data_to_csv(student_discussion_tuple[0],
                                                 student_discussion_tuple[1])
