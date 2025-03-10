@@ -18,7 +18,7 @@ from json_freader import JSONfreader
 from collections import OrderedDict
 
 
-class Canvas:
+class CanvasDiscussions:
     """This class reads data from a course's Canvas discussion engagements and
     prints the data in a CSV format.
 
@@ -73,39 +73,14 @@ class Canvas:
 
     enrollment_type = {'Student': 'StudentEnrollment', 'TA': 'TaEnrollment',
                        'Teacher': 'TeacherEnrollment'}
+    course_name = "Unknown"
 
-    def __init__(self, server_type: str, enrollment: str) -> None:
+    def __init__(self, server_type: str, enrollment: str,
+                 course_number: str) -> None:
         """Initializes the class with the server type."""
         self.server_type = server_type
         self.enrollment = enrollment
-
-    def get_server_url(self=None) -> str:
-        """Returns the server url.
-
-        Returns
-        -------
-        str : A string representing the server url.
-        """
-        return self.server_url[self.server_type]
-
-    def get_enrollment_type(self=None) -> str:
-        """Returns the Enrollment type.
-
-        Returns
-        -------
-        str : A string representing the Enrollment type.
-        """
-        return self.enrollment_type[self.enrollment]
-
-    def set_enrollment_type(self, enrollment_type: str) -> str:
-        """Sets the Enrollment type
-
-        Returns
-        -------
-        str : A string representing the Enrollment type.
-        """
-        self.enrollment = enrollment_type
-        return self.enrollment_type[self.enrollment]
+        self.course_num = course_number
 
     def get_token(self=None) -> dict:
         """Gets the API token from either an environment variable or a json
@@ -223,6 +198,34 @@ class Canvas:
                        token[self.server_type])}
         return headers
 
+    def get_server_url(self=None) -> str:
+        """Returns the server url.
+
+        Returns
+        -------
+        str : A string representing the server url.
+        """
+        return self.server_url[self.server_type]
+
+    def get_enrollment_type(self=None) -> str:
+        """Returns the Enrollment type.
+
+        Returns
+        -------
+        str : A string representing the Enrollment type.
+        """
+        return self.enrollment_type[self.enrollment]
+
+    def set_enrollment_type(self, enrollment_type: str) -> str:
+        """Sets the Enrollment type
+
+        Returns
+        -------
+        str : A string representing the Enrollment type.
+        """
+        self.enrollment = enrollment_type
+        return self.enrollment_type[self.enrollment]
+
     def get_enrollees(self, course_id: str) -> list[tuple]:
         """Gets only student enrollments in the course using the Enrollments API.
 
@@ -259,12 +262,12 @@ class Canvas:
                                    self.get_enrollment_type()
                             ]
                             enrollments.extend([(enrollment.get('user',
-                                                               {}).get(
+                                                                {}).get(
                                 'id', 'Unknown'), enrollment.get('user',
-                                                               {}).get(
+                                                                 {}).get(
                                 'sortable_name', 'Unknown').strip()) for
-                                                enrollment in
-                                                filtered_enrollments])
+                                enrollment in
+                                filtered_enrollments])
                             page_url = self.get_next_page_url(
                                 response.headers.get('Link'))
                             break  # Exit the retry loop on success
@@ -337,9 +340,7 @@ class Canvas:
         names as keys and a list of their courses as values; and a list of
         discussion topics sorted by posting date.
         """
-        enrollee_discussion_data = {}
-        page_url = (
-            f'{self.get_server_url()}api/v1/courses/{course_id}/discussion_topics?per_page=10')
+        page_url = f'{self.get_server_url()}api/v1/courses/{course_id}/discussion_topics?per_page=10'
         discussions = []
         while page_url:
             response = requests.get(page_url, headers=self.headers())
@@ -347,34 +348,39 @@ class Canvas:
                 try:
                     discussion_topics = response.json()
                     for topic in discussion_topics:
-                        is_published = topic.get('published', False)
-                        if is_published:
+                        if topic.get('published', False):
                             topic_title = topic.get('title', 'Unknown Title')
                             topic_id = topic.get('id', 'Unknown')
-                            topic_posted_date = topic.get('last_reply_at', '')
-                            discussions.append((
-                                topic_posted_date if topic_posted_date else '1900-01-01T00:00:00Z',
-                                topic_id, topic_title))
-
+                            topic_posted_date = topic.get('last_reply_at',
+                                                          '1900-01-01T00:00:00Z')
+                            discussions.append(
+                                (topic_posted_date, topic_id, topic_title))
                     page_url = self.get_next_page_url(
                         response.headers.get('Link'))
                 except json.JSONDecodeError:
                     print("Failed to decode JSON data from response")
                     return {}, []
+                except KeyError:
+                    print("Key error in processing discussion topics")
+                    return {}, []
             else:
                 print(
                     f"Unexpected error ({response.status_code}): {response.text}")
-                page_url = None  # Ensure loop exit on error
+                page_url = None
+        discussions.sort(
+            key=lambda x: x[0] if x[0] is not None else '1900-01-01T00:00:00Z')
+        # Initialize participation data after discussions list is populated
+        list_topic_titles = [title for _, _, title in discussions]
+        enrollee_discussion_data = {
+            enrollee[1]: [False] * len(list_topic_titles) for enrollee in
+            enrollees_in_course}
 
-        # Sort discussions by the posting date
-        discussions.sort(key=lambda x: x[
-            0])  # Sort using the first element of each tuple (date)
-        list_topic_titles = [title for _, _, title in
-                             discussions]  # Unpack sorted topics
+        # Process each topic and update participation data
         for _, topic_id, topic_title in discussions:
             self.process_full_topic_view(course_id, topic_id,
                                          enrollee_discussion_data, topic_title,
-                                         enrollees_in_course)
+                                         enrollees_in_course, list_topic_titles)
+
         ordered_by_sortable_name = OrderedDict(
             sorted(enrollee_discussion_data.items()))
         return ordered_by_sortable_name, list_topic_titles
@@ -416,8 +422,9 @@ class Canvas:
             return {}
 
     def process_full_topic_view(self, course_id: str, topic_id: str,
-                                enrollee_discussion_data: dict, topic_title: str,
-                                enrollees_in_course: list[tuple]) -> list:
+                                enrollee_discussion_data: dict, topic_title:
+            str, enrollees_in_course: list[tuple],
+                                list_topic_titles: list) -> None:
         """
         Processes the full topic view for a given course and topic, filtering
         participants based on specified Enrollment type.
@@ -443,24 +450,23 @@ class Canvas:
         """
         topic_view = self.get_full_topic_view(course_id, topic_id)
         if not topic_view:
-            return []
-        list_topic_titles = []
-        for entry in topic_view.get('participants', []):
-            participant_id = entry.get('id', 'Unknown')
-            matched_enrollee = next((enrollee for enrollee in
-                                     enrollees_in_course if enrollee[0] == participant_id), None)
+            return
+
+        for participant in topic_view.get('participants', []):
+            participant_id = participant.get('id', 'Unknown')
+            matched_enrollee = next(
+                (enrollee for enrollee in enrollees_in_course if
+                 enrollee[0] == participant_id), None)
             if matched_enrollee:
                 enrollee_name = matched_enrollee[1]
-                if enrollee_name not in enrollee_discussion_data:
-                    enrollee_discussion_data[enrollee_name] = [topic_title]
-                else:
-                    enrollee_discussion_data[enrollee_name].append(
-                        topic_title)
-                list_topic_titles.append(topic_title)
-        return list_topic_titles
+                topic_index = list_topic_titles.index(topic_title)
+                enrollee_discussion_data[enrollee_name][
+                    topic_index] = True
 
-    def write_discussion_data_to_csv(self, enrollee_name: dict,
-                                     discussion_titles: list) -> None:
+        return None
+
+    def write_discussion_data_to_csv(self, enrollee_discussion_data: dict,
+                                     discussion_titles: list):
         """Writes enrollee participation of each discussion topic to a CSV
         file.
 
@@ -479,31 +485,28 @@ class Canvas:
         Outputs a CSV file containing the enrollee participation of each
         discussion topic.
         """
-        if not enrollee_name:
-            print("No student discussion data")
-            return
         download_folder = Path.home() / 'Downloads'
-        print(download_folder)
         if not download_folder.exists():
             download_folder.mkdir()
-            print(f"Created folder: {download_folder}")
-        output_file_path = download_folder / 'discusssion_data.csv'
-        headers = ['Name'] + discussion_titles
-
-        with (open(output_file_path, 'w', newline='') as csvfile):
+        if self.get_enrollment_type() == "StudentEnrollment":
+            output_file_path = download_folder / (
+                f'{self.course_name}_students_discussions.csv')
+        else:
+            output_file_path = download_folder / (
+                f'{self.course_name}_instructors_discussions.csv')
+        with open(output_file_path, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow(headers)
-            for enrollee_name, topics in enrollee_name.items():
-                row = [enrollee_name]
-                for topic in discussion_titles:
-                    row.append(topic in topics)
-                writer.writerow(row)
+            writer.writerow(['Name'] + discussion_titles)
+            for enrollee, participations in enrollee_discussion_data.items():
+                writer.writerow(
+                    [enrollee] + ['Yes' if participated else 'No' for
+                                  participated in participations])
 
         print(f"CSV file written to {output_file_path}")
 
     # Retrieve course name
-    def get_course_name(self, course_id: str) -> str:
-        """Returns the name of the course.
+    def set_course_name(self, course_id: str) -> None:
+        """Sets the name of the course.
 
         Parameters:
         -----------
@@ -516,13 +519,22 @@ class Canvas:
         course_url = f'{self.get_server_url()}api/v1/courses/{course_id}'
         response = requests.get(course_url, headers=self.headers())
         course = response.json()
-        return course.get('name', 'Unknown Course')
+        self.course_name = course.get('name', 'Unknown Course')
+        return
+
+    def get_course_name(self) -> str:
+        """Gets the name of the course.
+
+        Returns:
+        --------
+        str : The name of the course
+        """
+        return self.course_name
 
 
-def main(course_num: str) -> None:
-
-    course_name = canvas.get_course_name(course_num)
-    print(f"Course Name: {course_name}")
+def main() -> None:
+    canvas.set_course_name(course_num)
+    print(f"Course Name: {canvas.course_name}")
     course_enrollees = canvas.get_enrollees(course_num)
     if canvas.get_enrollment_type() != 'StudentEnrollment':
         if canvas.get_enrollment_type() == 'TaEnrollment':
@@ -531,7 +543,6 @@ def main(course_num: str) -> None:
             canvas.set_enrollment_type('TA')
         course_enrollees_addt = canvas.get_enrollees(course_num)
         course_enrollees = course_enrollees + course_enrollees_addt
-    print(f"Enrollees_in_course: {course_enrollees}")
     if len(course_enrollees) > 0:
         enrollee_discussion_tuple = canvas.get_course_discussion_data(
             course_num, course_enrollees)
@@ -539,13 +550,13 @@ def main(course_num: str) -> None:
             canvas.write_discussion_data_to_csv(enrollee_discussion_tuple[0],
                                                 enrollee_discussion_tuple[1])
             return None
-    print(f"No CSV written for {course_name}")
+    print(f"No CSV written for {canvas.course_name}")
     return None
 
 
 if __name__ == '__main__':
-    # need clarity if command-line request for enrollment_type
-    canvas = Canvas('LPS_Test', 'TA')
-    # course_number = '1748632'
-    course_number = "1645103"
-    main(course_number)
+    # course_number = '1748632', Sandbox site
+    # Clay's course: "1844505"
+    course_num = "1645103"
+    canvas = CanvasDiscussions('LPS_Production', 'TA', course_num)
+    main()
