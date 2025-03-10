@@ -223,7 +223,7 @@ class Canvas:
                        token[self.server_type])}
         return headers
 
-    def get_enrollees(self, course_id: str) -> list[dict]:
+    def get_enrollees(self, course_id: str) -> list[tuple]:
         """Gets only student enrollments in the course using the Enrollments API.
 
         Parameters:
@@ -232,17 +232,15 @@ class Canvas:
 
         Returns:
         --------
-        list : List of dicts containing only sortable names of students
-        enrolled in the
-        course, or an empty list if no students are found or an error occurs.
+        list : List of tuples containing only sortable names and ids of students
+        enrolled in the course, or an empty list if no students are found or
+        an error occurs.
         """
         enrollments_url = (
             f'{self.get_server_url()}api/v1/courses/{course_id}/enrollments'
             f'?type[]={self.get_enrollment_type()}&per_page=100')
-        print(enrollments_url)
         max_retries = 3
         retry_delay = 2
-
         enrollments = []
         page_url = enrollments_url
 
@@ -255,16 +253,18 @@ class Canvas:
                         if isinstance(data, list) and all(
                                 isinstance(enrollment, dict) for enrollment in
                                 data):
-                            student_enrollments = [
+                            filtered_enrollments = [
                                 enrollment for enrollment in data
                                 if enrollment.get('type') ==
                                    self.get_enrollment_type()
                             ]
-                            enrollments.extend([enrollment.get('user',
+                            enrollments.extend([(enrollment.get('user',
                                                                {}).get(
-                                'sortable_name', 'Unknown').strip(" ") for
+                                'id', 'Unknown'), enrollment.get('user',
+                                                               {}).get(
+                                'sortable_name', 'Unknown').strip()) for
                                                 enrollment in
-                                                student_enrollments])
+                                                filtered_enrollments])
                             page_url = self.get_next_page_url(
                                 response.headers.get('Link'))
                             break  # Exit the retry loop on success
@@ -301,7 +301,6 @@ class Canvas:
                 print(
                     "Max retries reached. Could not retrieve enrollment data.")
                 return []
-        print(f"Enrollments is {enrollments}")
         return enrollments
 
     def get_next_page_url(self, link_header: str) -> str:
@@ -324,7 +323,7 @@ class Canvas:
         return ""
 
     def get_course_discussion_data(self, course_id: str,
-                                   enrollees_in_course: list[str]) -> tuple[
+                                   enrollees_in_course: list[tuple]) -> tuple[
         dict, list]:
         """Gets the discussion data for the given course, sorted by the date they were posted.
 
@@ -338,24 +337,24 @@ class Canvas:
         names as keys and a list of their courses as values; and a list of
         discussion topics sorted by posting date.
         """
-        student_discussion_data = {}
+        enrollee_discussion_data = {}
         page_url = (
             f'{self.get_server_url()}api/v1/courses/{course_id}/discussion_topics?per_page=10')
         discussions = []
-
         while page_url:
             response = requests.get(page_url, headers=self.headers())
             if response.status_code == 200:
                 try:
                     discussion_topics = response.json()
                     for topic in discussion_topics:
-                        topic_title = topic.get('title', 'Unknown Title')
-                        topic_id = topic.get('id', 'Unknown')
-                        topic_posted_date = topic.get('last_reply_at',
-                                                      '')  # Fetch the posting date
-                        discussions.append((
-                            topic_posted_date if topic_posted_date else '1900-01-01T00:00:00Z',
-                            topic_id, topic_title))
+                        is_published = topic.get('published', False)
+                        if is_published:
+                            topic_title = topic.get('title', 'Unknown Title')
+                            topic_id = topic.get('id', 'Unknown')
+                            topic_posted_date = topic.get('last_reply_at', '')
+                            discussions.append((
+                                topic_posted_date if topic_posted_date else '1900-01-01T00:00:00Z',
+                                topic_id, topic_title))
 
                     page_url = self.get_next_page_url(
                         response.headers.get('Link'))
@@ -372,15 +371,13 @@ class Canvas:
             0])  # Sort using the first element of each tuple (date)
         list_topic_titles = [title for _, _, title in
                              discussions]  # Unpack sorted topics
-
         for _, topic_id, topic_title in discussions:
             self.process_full_topic_view(course_id, topic_id,
-                                         student_discussion_data, topic_title,
+                                         enrollee_discussion_data, topic_title,
                                          enrollees_in_course)
-
-        ordered_by_student_name = OrderedDict(
-            sorted(student_discussion_data.items()))
-        return ordered_by_student_name, list_topic_titles
+        ordered_by_sortable_name = OrderedDict(
+            sorted(enrollee_discussion_data.items()))
+        return ordered_by_sortable_name, list_topic_titles
 
     def get_full_topic_view(self, course_id: str, topic_id: str) -> dict:
         """Gets the full topic for each discussion topic, which included
@@ -419,11 +416,12 @@ class Canvas:
             return {}
 
     def process_full_topic_view(self, course_id: str, topic_id: str,
-                                student_discussion_data: dict, topic_title: str,
-                                enrolled_student_names: list[str]) -> list:
+                                enrollee_discussion_data: dict, topic_title: str,
+                                enrollees_in_course: list[tuple]) -> list:
         """
-        Processes the full topic view for a given course and topic, filtering participants
-        based on enrolled students with StudentEnrollment.
+        Processes the full topic view for a given course and topic, filtering
+        participants based on specified Enrollment type.
+
 
         Parameters
         ----------
@@ -431,12 +429,13 @@ class Canvas:
 
         topic_id (str): ID of the discussion topic.
 
-        student_discussion_data (dict): Dictionary containing discussion data
-        for students.
+        enrollees_discussion_data (dict): Dict containing the sortable name
+        of enrollees and a list of discussion topics.
 
         topic_title (str): Title of the discussion topic.
-        enrolled_student_names (list): List of sortable names of students with
-        StudentEnrollment.
+
+        enrollees_in_course (list[tuple]): List containing tuple with the id
+        and sortable name for enrollment type of course.
 
         Returns
         -------
@@ -445,39 +444,29 @@ class Canvas:
         topic_view = self.get_full_topic_view(course_id, topic_id)
         if not topic_view:
             return []
-
         list_topic_titles = []
-
-        # Iterate through all participants in the topic view
         for entry in topic_view.get('participants', []):
-            participant_name = entry.get('display_name', '')
-
-            # Convert 'First Last' format to 'Last, First' to match sortable names
-            name_parts = participant_name.split()
-            if len(name_parts) > 1:
-                transformed_name = f"{' '.join(name_parts[1:])}, {name_parts[0]}"
-            else:
-                transformed_name = participant_name
-
-            # Filter out users who are not in the list of enrolled student names
-            if transformed_name in enrolled_student_names:
-                if transformed_name not in student_discussion_data:
-                    student_discussion_data[transformed_name] = [topic_title]
+            participant_id = entry.get('id', 'Unknown')
+            matched_enrollee = next((enrollee for enrollee in
+                                     enrollees_in_course if enrollee[0] == participant_id), None)
+            if matched_enrollee:
+                enrollee_name = matched_enrollee[1]
+                if enrollee_name not in enrollee_discussion_data:
+                    enrollee_discussion_data[enrollee_name] = [topic_title]
                 else:
-                    student_discussion_data[transformed_name].append(
+                    enrollee_discussion_data[enrollee_name].append(
                         topic_title)
-
                 list_topic_titles.append(topic_title)
         return list_topic_titles
 
-    def write_discussion_data_to_csv(self, student_discussion_data: dict,
+    def write_discussion_data_to_csv(self, enrollee_name: dict,
                                      discussion_titles: list) -> None:
-        """Writes student participation of each discussion topic to a CSV
+        """Writes enrollee participation of each discussion topic to a CSV
         file.
 
         Parameters
         ----------
-        student_discussion_data (dict) : Student participation of discussion
+        enrollee_name (dict) : Enrollee participation of discussion
         topics.
 
         discussion_titles (list): List of discussion topics.
@@ -487,10 +476,10 @@ class Canvas:
         None
 
         Notes:
-        Outputs a CSV file containing the student participation of each
+        Outputs a CSV file containing the enrollee participation of each
         discussion topic.
         """
-        if not student_discussion_data:
+        if not enrollee_name:
             print("No student discussion data")
             return
         download_folder = Path.home() / 'Downloads'
@@ -504,9 +493,8 @@ class Canvas:
         with (open(output_file_path, 'w', newline='') as csvfile):
             writer = csv.writer(csvfile)
             writer.writerow(headers)
-            # Write each student's participation data
-            for student_name, topics in student_discussion_data.items():
-                row = [student_name]
+            for enrollee_name, topics in enrollee_name.items():
+                row = [enrollee_name]
                 for topic in discussion_titles:
                     row.append(topic in topics)
                 writer.writerow(row)
@@ -545,13 +533,14 @@ def main(course_num: str) -> None:
         course_enrollees = course_enrollees + course_enrollees_addt
     print(f"Enrollees_in_course: {course_enrollees}")
     if len(course_enrollees) > 0:
-        student_discussion_tuple = canvas.get_course_discussion_data(
+        enrollee_discussion_tuple = canvas.get_course_discussion_data(
             course_num, course_enrollees)
-        if student_discussion_tuple[0] and student_discussion_tuple[1]:
-            canvas.write_discussion_data_to_csv(student_discussion_tuple[0],
-                                                student_discussion_tuple[1])
+        if enrollee_discussion_tuple[0] and enrollee_discussion_tuple[1]:
+            canvas.write_discussion_data_to_csv(enrollee_discussion_tuple[0],
+                                                enrollee_discussion_tuple[1])
             return None
     print(f"No CSV written for {course_name}")
+    return None
 
 
 if __name__ == '__main__':
