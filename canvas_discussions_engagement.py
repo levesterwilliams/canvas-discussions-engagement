@@ -27,6 +27,12 @@ class CanvasDiscussions:
     server_url : dict
         A dictionary that contains information about the server url.
 
+    enrollment_type : dist
+        A dictionary that contains the Enrollment type to be queried.
+
+    course_name : str
+        A string that represents the course name.
+
     Methods:
     --------
     get_server_url():
