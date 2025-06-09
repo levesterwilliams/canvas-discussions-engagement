@@ -3,7 +3,7 @@
 # 31 August 2023
 #
 # Platform info:
-# - python 3.11.0
+# - python 3.12.0
 #
 
 import csv
@@ -561,8 +561,9 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    # course_number = '1748632', Sandbox site
-    # Clay's course: "1844505"
-    course_num = "1645103"
-    canvas = CanvasDiscussions('LPS_Production', 'TA', course_num)
+    # '1748632', Sandbox site
+    # ENLT 1200 course: "1844505"
+    #DIGC 1200: "1849493"
+    course_num = "1849493"
+    canvas = CanvasDiscussions('LPS_Production', 'Student', course_num)
     main()
