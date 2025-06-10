@@ -561,9 +561,6 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    # '1748632', Sandbox site
-    # ENLT 1200 course: "1844505"
-    #DIGC 1200: "1849493"
     course_num = "1849493"
     canvas = CanvasDiscussions('LPS_Production', 'Student', course_num)
     main()
