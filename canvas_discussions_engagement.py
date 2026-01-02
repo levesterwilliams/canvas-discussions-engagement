@@ -1,147 +1,62 @@
-#
-# Levester Williams
-# 31 August 2023
-#
-# Platform info:
-# - python 3.12.0
+# canvas_discussions_engagement.py
+# Author: Levester Williams
+# 31 July 2024
 #
 
-import csv
+
+
+from __future__ import annotations
+
 import requests
 import json
 import sys
 import os
 import time
+from typing import Dict, List, Tuple, Optional, OrderedDict as OrderedDictType
 from json import JSONDecodeError
 from pathlib import Path
 from json_freader import JSONfreader
 from collections import OrderedDict
 
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
+
 
 class CanvasDiscussions:
-    """This class reads data from a course's Canvas discussion engagements and
-    prints the data in a CSV format.
+    server_url = {
+        'LPS_Production': 'https://canvas.upenn.edu/',
+        'LPS_Test': 'https://upenn.test.instructure.com/',
+    }
 
-    Attributes:
-    -----------
-    server_url : dict
-        A dictionary that contains information about the server url.
+    enrollment_type = {
+        'Student': 'StudentEnrollment',
+        'TA': 'TaEnrollment',
+        'Teacher': 'TeacherEnrollment',
+    }
 
-    enrollment_type : dist
-        A dictionary that contains the Enrollment type to be queried.
-
-    course_name : str
-        A string that represents the course name.
-
-    Methods:
-    --------
-    get_server_url():
-        Retrieves the server url.
-
-    get_token():
-        Retrieves the API token.
-
-    get_cred_json():
-        Retrieves an API token from a json file.
-
-    get_cred_env_var():
-        Retrieves an API token from an environment variable.
-
-    headers():
-        Generates HTTP headers.
-
-    get_enrollees():
-        Gets enrollees enrolled in the course.
-
-    set_enrollment_type():
-        Sets the Enrollment type
-
-    get_next_page_url():
-        Gets the next page URI for the discussion page.
-
-    get_course_discussion_data():
-        Gets the discussion data for the given course.
-
-    get_full_topic_view():
-        Gets the full topic for each discussion topic.
-
-    process_full_topic_view():
-        Stores what discussion topic students replied to.
-
-    write_discussion_data_to_csv():
-        Writes student participation of each discussion to a CSV file.
-
-    get_course_name():
-        Returns the name of the course.
-    """
-    server_url = {'LPS_Production': 'https://canvas.upenn.edu/', 'LPS_Test':
-        'https://upenn.test.instructure.com/'}
-
-    enrollment_type = {'Student': 'StudentEnrollment', 'TA': 'TaEnrollment',
-                       'Teacher': 'TeacherEnrollment'}
     course_name = "Unknown"
 
-    def __init__(self, server_type: str, enrollment: str,
-                 course_number: str) -> None:
-        """Initializes the class with the server type."""
+    def __init__(self, server_type: str, enrollment: str, course_number: str) -> None:
         self.server_type = server_type
         self.enrollment = enrollment
         self.course_num = course_number
+        self.discussions_meta: List[Dict[str, object]] = []          # [{"id": int, "title": str}]
+        self.module_discussion_map: Dict[str, List[int]] = {}         # module_name -> [discussion_topic_id, ...]
 
+    # ---------- Credentials & headers
     def get_token(self=None) -> dict:
-        """Gets the API token from either an environment variable or a json
-        file.
-
-        Parameters:
-        -----------
-        self : none
-
-        Returns:
-        --------
-        dict : An API token.
-
-        Note: Environment variable is automatically turned on. Need more
-        clarification on the running environment of this script.
-        """
-        environ_var = True
-        if environ_var:
-            return self.get_cred_env_var()
-        return self.get_cred_json()
+        return self.get_cred_env_var()
 
     def get_cred_json(self=None) -> dict:
-        """
-        Retrieves an API token from a json file.
-
-        Parameters:
-        -----------
-        self : none
-
-        Returns:
-        --------
-        dict : An API token from either an environment variable or a json file.
-
-        Raises:
-        -------
-        FileNotFoundError
-            If the file does not exist.
-        RuntimeError
-            If credentials are invalid.
-        Exception
-            If an error occurs.
-        """
         reader = JSONfreader()
-        # have to inquire how the cred should be stored and if team has
-        # access to a secret manager
         json_file_path = ""
         try:
             cred = reader.load_json_file(json_file_path)
-        except FileNotFoundError as e:
-            print(f"The credentials file cred.json was not found")
-            # Must consult with others about whether the client should have
-            # the ability to manually input the filepath to credential
+        except FileNotFoundError:
+            print("The credentials file cred.json was not found")
             sys.exit(1)
         except RuntimeError:
-            print(f"The credentials file cred.json contains invalid JSON.")
+            print("The credentials file cred.json contains invalid JSON.")
             sys.exit(1)
         except Exception as e:
             print(f"Unexpected error: {e}")
@@ -149,34 +64,13 @@ class CanvasDiscussions:
         return cred
 
     def get_cred_env_var(self=None) -> dict:
-        """Gets the API token from an environment variable.
-
-        Parameters:
-        -----------
-        self : none
-
-        Returns:
-        --------
-        dict : An API token.
-
-        Raises:
-        -------
-        KeyError
-            If the key-value pair does not exist.
-        json.JSONDecodeError
-            If JSON is invalid.
-        TypeError
-            If type is not a JSON string
-        Exception
-            If an error occurs.
-        """
         try:
             cred = json.loads(os.getenv('CANVAS_API_CRED'))
         except KeyError:
-            print(f"Environment variable CANVAS_API_CRED does not exist.")
+            print("Environment variable CANVAS_API_CRED does not exist.")
             sys.exit(1)
         except json.JSONDecodeError:
-            print(f"Contains invalid JSON.")
+            print("Contains invalid JSON.")
             sys.exit(1)
         except TypeError:
             print("Invalid type: expected a JSON string.")
@@ -187,167 +81,134 @@ class CanvasDiscussions:
         return cred
 
     def headers(self) -> dict:
-        """Generates and returns HTTP headers to send JSON data and
-        authentication for API calls.
-
-        Parameters:
-        -----------
-        self : none
-
-        Returns:
-        --------
-        dict : HTTP headers.
-        """
         token = self.get_token()
-        headers = {'Content-Type': 'application/json',
-                   'Authorization': 'Bearer {}'.format(
-                       token[self.server_type])}
-        return headers
+        return {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {token[self.server_type]}',
+        }
 
+    # ---------- Simple getters/setters
     def get_server_url(self=None) -> str:
-        """Returns the server url.
-
-        Returns
-        -------
-        str : A string representing the server url.
-        """
         return self.server_url[self.server_type]
 
     def get_enrollment_type(self=None) -> str:
-        """Returns the Enrollment type.
-
-        Returns
-        -------
-        str : A string representing the Enrollment type.
-        """
         return self.enrollment_type[self.enrollment]
 
     def set_enrollment_type(self, enrollment_type: str) -> str:
-        """Sets the Enrollment type
-
-        Returns
-        -------
-        str : A string representing the Enrollment type.
-        """
         self.enrollment = enrollment_type
         return self.enrollment_type[self.enrollment]
 
-    def get_enrollees(self, course_id: str) -> list[tuple]:
-        """Gets only student enrollments in the course using the Enrollments API.
-
-        Parameters:
-        -----------
-        course_id (str) : ID of the course.
-
-        Returns:
-        --------
-        list : List of tuples containing only sortable names and ids of students
-        enrolled in the course, or an empty list if no students are found or
-        an error occurs.
-        """
-        enrollments_url = (
-            f'{self.get_server_url()}api/v1/courses/{course_id}/enrollments'
-            f'?type[]={self.get_enrollment_type()}&per_page=100')
-        max_retries = 3
-        retry_delay = 2
-        enrollments = []
-        page_url = enrollments_url
-
-        while page_url:
-            for attempt in range(max_retries):
-                response = requests.get(page_url, headers=self.headers())
-                if response.status_code == 200:
-                    try:
-                        data = response.json()
-                        if isinstance(data, list) and all(
-                                isinstance(enrollment, dict) for enrollment in
-                                data):
-                            filtered_enrollments = [
-                                enrollment for enrollment in data
-                                if enrollment.get('type') ==
-                                   self.get_enrollment_type()
-                            ]
-                            enrollments.extend([(enrollment.get('user',
-                                                                {}).get(
-                                'id', 'Unknown'), enrollment.get('user',
-                                                                 {}).get(
-                                'sortable_name', 'Unknown').strip()) for
-                                enrollment in
-                                filtered_enrollments])
-                            page_url = self.get_next_page_url(
-                                response.headers.get('Link'))
-                            break  # Exit the retry loop on success
-
-                        else:
-                            print("Error: Unexpected API response format")
-                            return []
-
-                    except JSONDecodeError:
-                        print("Failed to decode JSON data from response")
-                        return []
-
-                elif response.status_code in {401, 403}:
-                    print(
-                        "Unauthorized: Check your API token or re-authenticate.")
-                    return []
-
-                elif response.status_code == 404:
-                    print(
-                        f"Not Found: The course with ID {course_id} does not exist.")
-                    return []
-
-                elif response.status_code == 500:
-                    print(
-                        f"Server error: Retrying request in {retry_delay} seconds...")
-                    time.sleep(retry_delay)
-
-                else:
-                    print(
-                        f"Unexpected error ({response.status_code}): {response.text}")
-                    return []
-
-            if response.status_code != 200:
-                print(
-                    "Max retries reached. Could not retrieve enrollment data.")
-                return []
-        return enrollments
-
-    def get_next_page_url(self, link_header: str) -> str:
-        """Gets the next page URI for the discussion page.
-
-        Parameters
-        ----------
-        link_header (str) : Header for the next URI for the discussion page.
-
-        Returns
-        -------
-        str : URI for the next page.
-        """
+    # ---------- Canvas API helpers
+    def get_next_page_url(self, link_header: Optional[str]) -> str:
         if link_header:
             links = link_header.split(',')
             for link in links:
                 if 'rel="next"' in link:
-                    next_link = link.split(';')[0].strip('<> ')
-                    return next_link
+                    return link.split(';')[0].strip('<> ')
         return ""
 
-    def get_course_discussion_data(self, course_id: str,
-                                   enrollees_in_course: list[tuple]) -> tuple[
-        dict, list]:
-        """Gets the discussion data for the given course, sorted by the date they were posted.
+    def _paged_get(self, url: str) -> List[dict]:
+        items: List[dict] = []
+        page_url = url
+        max_retries = 3
+        retry_delay = 2
+        while page_url:
+            for _ in range(max_retries):
+                resp = requests.get(page_url, headers=self.headers())
+                if resp.status_code == 200:
+                    try:
+                        chunk = resp.json()
+                        if isinstance(chunk, list):
+                            items.extend(chunk)
+                        elif isinstance(chunk, dict):
+                            items.append(chunk)
+                        else:
+                            print("Error: Unexpected API response format")
+                            return []
+                        page_url = self.get_next_page_url(resp.headers.get('Link'))
+                        break
+                    except JSONDecodeError:
+                        print("Failed to decode JSON data from response")
+                        return []
+                elif resp.status_code == 500:
+                    time.sleep(retry_delay)
+                else:
+                    print(f"Unexpected error ({resp.status_code}): {resp.text}")
+                    return []
+            else:
+                print("Max retries reached. Could not complete paged GET.")
+                return []
+        return items
 
-        Parameters
-        ---------
-        course_id (str) : ID for the course.
+    # ---------- Enrollments
+    def get_enrollees(self, course_id: str) -> List[Tuple[int, str]]:
+        enrollments_url = (
+            f'{self.get_server_url()}api/v1/courses/{course_id}/enrollments'
+            f'?type[]={self.get_enrollment_type()}&per_page=100'
+        )
+        items = self._paged_get(enrollments_url)
+        filtered = [
+            e for e in items
+            if isinstance(e, dict) and e.get('type') == self.get_enrollment_type()
+        ]
+        enrollments: List[Tuple[int, str]] = []
+        for e in filtered:
+            uid = e.get('user', {}).get('id', 'Unknown')
+            name = e.get('user', {}).get('sortable_name', 'Unknown')
+            if isinstance(uid, int) and isinstance(name, str):
+                enrollments.append((uid, name.strip()))
+        return enrollments
 
-        Returns
-        -------
-        tuple[dict, list] : Returns a tuple containing the dict of student
-        names as keys and a list of their courses as values; and a list of
-        discussion topics sorted by posting date.
-        """
-        page_url = f'{self.get_server_url()}api/v1/courses/{course_id}/discussion_topics?per_page=10'
-        discussions = []
+    # ---------- Discussions
+    def get_full_topic_view(self, course_id: str, topic_id: int) -> dict:
+        # Fix accidental double slash
+        url = (
+            f'{self.get_server_url()}api/v1/courses/{course_id}'
+            f'/discussion_topics/{topic_id}/view'
+        )
+        response = requests.get(url, headers=self.headers())
+        if response.status_code == 200:
+            try:
+                return response.json()
+            except JSONDecodeError:
+                print("Failed to decode JSON from response")
+                return {}
+        elif response.status_code == 403:
+            return {}
+        else:
+            print(f"Error fetching full topic view: {response.status_code}, {response.text}")
+            return {}
+
+    def process_full_topic_view(
+        self,
+        course_id: str,
+        topic_id: int,
+        enrollee_discussion_data: Dict[str, List[bool]],
+        topic_title: str,
+        enrollees_in_course: List[Tuple[int, str]],
+        list_topic_titles: List[str],
+    ) -> None:
+        topic_view = self.get_full_topic_view(course_id, topic_id)
+        if not topic_view:
+            return
+        id_to_name = {uid: name for uid, name in enrollees_in_course}
+        try:
+            idx = list_topic_titles.index(topic_title)
+        except ValueError:
+            return
+        for participant in topic_view.get('participants', []):
+            pid = participant.get('id')
+            if pid in id_to_name:
+                enrollee_name = id_to_name[pid]
+                enrollee_discussion_data[enrollee_name][idx] = True
+
+    def get_course_discussion_data(
+        self,
+        course_id: str,
+        enrollees_in_course: List[Tuple[int, str]],
+    ) -> Tuple[OrderedDictType[str, List[bool]], List[str]]:
+        page_url = f'{self.get_server_url()}api/v1/courses/{course_id}/discussion_topics?per_page=100'
+        discussions: List[Tuple[str, int, str]] = []
         while page_url:
             response = requests.get(page_url, headers=self.headers())
             if response.status_code == 200:
@@ -356,211 +217,202 @@ class CanvasDiscussions:
                     for topic in discussion_topics:
                         if topic.get('published', False):
                             topic_title = topic.get('title', 'Unknown Title')
-                            topic_id = topic.get('id', 'Unknown')
-                            topic_posted_date = topic.get('last_reply_at',
-                                                          '1900-01-01T00:00:00Z')
-                            discussions.append(
-                                (topic_posted_date, topic_id, topic_title))
-                    page_url = self.get_next_page_url(
-                        response.headers.get('Link'))
+                            topic_id = topic.get('id', None)
+                            topic_posted_date = (
+                                topic.get('last_reply_at')
+                                or topic.get('posted_at')
+                                or topic.get('created_at')
+                                or '1900-01-01T00:00:00Z'
+                            )
+                            if isinstance(topic_id, int):
+                                discussions.append((topic_posted_date, topic_id, topic_title))
+                    page_url = self.get_next_page_url(response.headers.get('Link'))
                 except json.JSONDecodeError:
                     print("Failed to decode JSON data from response")
-                    return {}, []
+                    return OrderedDict(), []
                 except KeyError:
                     print("Key error in processing discussion topics")
-                    return {}, []
+                    return OrderedDict(), []
             else:
-                print(
-                    f"Unexpected error ({response.status_code}): {response.text}")
+                print(f"Unexpected error ({response.status_code}): {response.text}")
                 page_url = None
-        discussions.sort(
-            key=lambda x: x[0] if x[0] is not None else '1900-01-01T00:00:00Z')
-        # Initialize participation data after discussions list is populated
-        list_topic_titles = [title for _, _, title in discussions]
-        enrollee_discussion_data = {
-            enrollee[1]: [False] * len(list_topic_titles) for enrollee in
-            enrollees_in_course}
 
-        # Process each topic and update participation data
+        discussions.sort(key=lambda x: x[0] or '1900-01-01T00:00:00Z')
+        self.discussions_meta = [{"id": tid, "title": title} for _, tid, title in discussions]
+        list_topic_titles = [m["title"] for m in self.discussions_meta]
+
+        enrollee_discussion_data: Dict[str, List[bool]] = {
+            enrollee_name: [False] * len(self.discussions_meta)
+            for _, enrollee_name in enrollees_in_course
+        }
+
         for _, topic_id, topic_title in discussions:
-            self.process_full_topic_view(course_id, topic_id,
-                                         enrollee_discussion_data, topic_title,
-                                         enrollees_in_course, list_topic_titles)
+            self.process_full_topic_view(
+                course_id,
+                topic_id,
+                enrollee_discussion_data,
+                topic_title,
+                enrollees_in_course,
+                list_topic_titles,
+            )
 
-        ordered_by_sortable_name = OrderedDict(
-            sorted(enrollee_discussion_data.items()))
+        # Build the module map here (normal path)
+        self.build_module_discussion_map(course_id)
+        print(f"Map keys for module are "
+              f"{self.module_discussion_map.keys()}")
+        ordered_by_sortable_name = OrderedDict(sorted(enrollee_discussion_data.items()))
         return ordered_by_sortable_name, list_topic_titles
 
-    def get_full_topic_view(self, course_id: str, topic_id: str) -> dict:
-        """Gets the full topic for each discussion topic, which included
-           threaded responses.
+    # ---------- Modules → Discussion mapping
+    def get_modules(self, course_id: str) -> List[dict]:
+        url = f'{self.get_server_url()}api/v1/courses/{course_id}/modules?per_page=100'
+        return self._paged_get(url)
 
-        Parameters
-        ---------
-        course_id (str) : ID for the course.
-        topic_id (str) : ID for the discussion topic.
+    def get_module_items(self, course_id: str, module_id: int) -> List[dict]:
+        url = f'{self.get_server_url()}api/v1/courses/{course_id}/modules/{module_id}/items?per_page=100'
+        return self._paged_get(url)
 
-        Returns
-        -------
-        dict : Data associated with the topic discussion.
-        """
-        full_topic_view_url = (f'{self.get_server_url()}/api/v1/'
-                               f'courses/{course_id}/discussion_topics/'
-                               f'{topic_id}/view')
-        response = requests.get(full_topic_view_url, headers=self.headers())
-        if response.status_code == 200:
-            try:
-                full_topic_view = response.json()
-                return full_topic_view
-            except JSONDecodeError:
-                print("Failed to decode JSON from response")
-                return {}
-        elif response.status_code == 403:
-            # skip over as topic requires user to have posted
-            return {}
-        # NOTE: may need to handle 503 error if the cached structure is not yet
-        # ready and prompt the caller to try again or sleep and wait and call
-        # again
-        else:
-            print(
-                f"Error fetching full topic view: {response.status_code},"
-                f" {response.text}")
-            return {}
+    def build_module_discussion_map(self, course_id: str) -> None:
+        self.module_discussion_map = {}
+        modules = self.get_modules(course_id)
+        # Debug: surface empty modules early
+        if not modules:
+            print("No Canvas modules returned (empty list). Check course has Modules enabled and API token scope.")
+            return
+        for mod in modules:
+            module_name = (mod.get('name') or f"Module {mod.get('id', 'Unknown')}").strip()
+            module_id = mod.get('id')
+            if not isinstance(module_id, int):
+                continue
+            items = self.get_module_items(course_id, module_id)
+            # Optional debug:
+            # print(f"Module '{module_name}': {len(items)} items")
+            for it in items:
+                if it.get('type') == 'Discussion':
+                    self.module_discussion_map.setdefault(module_name,
+                                                          []).append(it['content_id'])
 
-    def process_full_topic_view(self, course_id: str, topic_id: str,
-                                enrollee_discussion_data: dict, topic_title:
-            str, enrollees_in_course: list[tuple],
-                                list_topic_titles: list) -> None:
-        """
-        Processes the full topic view for a given course and topic, filtering
-        participants based on specified Enrollment type.
+    # ---------- XLSX Writer
+    def _output_basepath(self) -> Path:
+        download_folder = Path.home() / 'Downloads'
+        download_folder.mkdir(parents=True, exist_ok=True)
+        return download_folder
 
+    def _role_label(self) -> str:
+        return "students" if self.get_enrollment_type() == "StudentEnrollment" else "instructors"
 
-        Parameters
-        ----------
-        course_id (str): ID of the course.
+    def _unique_sheet_name(self, wb: Workbook, base: str) -> str:
+        invalid = set('[]:*?/\\')
+        cleaned = ''.join(ch for ch in base if ch not in invalid).strip().rstrip('.')
+        if not cleaned:
+            cleaned = "Sheet"
+        name = cleaned[:31]
+        if name not in wb.sheetnames:
+            return name
+        n = 2
+        while True:
+            candidate = f"{name[:31 - len(str(n)) - 1]} {n}"
+            if candidate not in wb.sheetnames:
+                return candidate
+            n += 1
 
-        topic_id (str): ID of the discussion topic.
+    def _autowidth(self, ws, max_rows: int, max_cols: int) -> None:
+        for c in range(1, max_cols + 1):
+            col_letter = get_column_letter(c)
+            max_len = 10
+            for r in range(1, max_rows + 1):
+                val = ws.cell(row=r, column=c).value
+                max_len = max(max_len, len(str(val)) if val is not None else 0)
+            ws.column_dimensions[col_letter].width = min(max_len + 2, 60)
 
-        enrollees_discussion_data (dict): Dict containing the sortable name
-        of enrollees and a list of discussion topics.
+    def write_module_breakdown_xlsx(self, enrollee_discussion_data: Dict[str, List[bool]]) -> None:
+        # Why: Users sometimes call this directly; ensure module map exists.
+        if not self.module_discussion_map:
+            # Attempt to build with the current course id
+            self.build_module_discussion_map(self.course_num)
 
-        topic_title (str): Title of the discussion topic.
-
-        enrollees_in_course (list[tuple]): List containing tuple with the id
-        and sortable name for enrollment type of course.
-
-        Returns
-        -------
-        list : List of topic titles for the processed students.
-        """
-        topic_view = self.get_full_topic_view(course_id, topic_id)
-        if not topic_view:
+        if not self.discussions_meta:
+            print("No discussion data to write.")
             return
 
-        for participant in topic_view.get('participants', []):
-            participant_id = participant.get('id', 'Unknown')
-            matched_enrollee = next(
-                (enrollee for enrollee in enrollees_in_course if
-                 enrollee[0] == participant_id), None)
-            if matched_enrollee:
-                enrollee_name = matched_enrollee[1]
-                topic_index = list_topic_titles.index(topic_title)
-                enrollee_discussion_data[enrollee_name][
-                    topic_index] = True
+        id_to_index: Dict[int, int] = {int(meta["id"]): i for i, meta in enumerate(self.discussions_meta) if isinstance(meta.get("id"), int)}
 
-        return None
+        wb = Workbook()
+        wb.remove(wb.active)
 
-    def write_discussion_data_to_csv(self, enrollee_discussion_data: dict,
-                                     discussion_titles: list):
-        """Writes enrollee participation of each discussion topic to a CSV
-        file.
+        # ---- Overview_All (all discussions)
+        overview = wb.create_sheet(title="Overview_All")
+        all_headers = ["Name"] + [str(meta["title"]) for meta in self.discussions_meta]
+        for j, header in enumerate(all_headers, start=1):
+            overview.cell(row=1, column=j, value=header)
+        r = 2
+        for enrollee, participations in enrollee_discussion_data.items():
+            overview.cell(row=r, column=1, value=enrollee)
+            for j, p in enumerate(participations, start=2):
+                overview.cell(row=r, column=j, value="Yes" if p else "No")
+            r += 1
+        self._autowidth(overview, r - 1, len(all_headers))
 
-        Parameters
-        ----------
-        enrollee_name (dict) : Enrollee participation of discussion
-        topics.
-
-        discussion_titles (list): List of discussion topics.
-
-        Returns
-        -------
-        None
-
-        Notes:
-        Outputs a CSV file containing the enrollee participation of each
-        discussion topic.
-        """
-        download_folder = Path.home() / 'Downloads'
-        if not download_folder.exists():
-            download_folder.mkdir()
-        if self.get_enrollment_type() == "StudentEnrollment":
-            output_file_path = download_folder / (
-                f'{self.course_name}_students_discussions.csv')
-        else:
-            output_file_path = download_folder / (
-                f'{self.course_name}_instructors_discussions.csv')
-        with open(output_file_path, 'w', newline='') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(['Name'] + discussion_titles)
+        # ---- Per-module sheets (Discussion items only)
+        if not self.module_discussion_map:
+            print("No per-module sheets written (module map is empty).")
+        for module_name in sorted(self.module_discussion_map.keys()):
+            topic_ids = self.module_discussion_map.get(module_name, [])
+            col_indices: List[int] = [id_to_index[tid] for tid in topic_ids if tid in id_to_index]
+            if not col_indices:
+                continue
+            ws = wb.create_sheet(title=self._unique_sheet_name(wb, module_name))
+            headers = ["Name"] + [str(self.discussions_meta[i]["title"]) for i in col_indices]
+            for j, header in enumerate(headers, start=1):
+                ws.cell(row=1, column=j, value=header)
+            r = 2
             for enrollee, participations in enrollee_discussion_data.items():
-                writer.writerow(
-                    [enrollee] + ['Yes' if participated else 'No' for
-                                  participated in participations])
+                ws.cell(row=r, column=1, value=enrollee)
+                for k, overall_idx in enumerate(col_indices, start=2):
+                    ws.cell(row=r, column=k, value="Yes" if participations[overall_idx] else "No")
+                r += 1
+            self._autowidth(ws, r - 1, len(headers))
 
-        print(f"CSV file written to {output_file_path}")
+        role = self._role_label()
+        xlsx_path = self._output_basepath() / f"{self.course_name}__{role}_discussions.xlsx"
+        wb.save(xlsx_path)
+        print(f"XLSX written: {xlsx_path}")
 
-    # Retrieve course name
+    # ---------- Course name
     def set_course_name(self, course_id: str) -> None:
-        """Sets the name of the course.
-
-        Parameters:
-        -----------
-        course_id (str) : The id of the course.
-
-        Returns:
-        --------
-        str : The name of the course.
-        """
         course_url = f'{self.get_server_url()}api/v1/courses/{course_id}'
         response = requests.get(course_url, headers=self.headers())
-        course = response.json()
-        self.course_name = course.get('name', 'Unknown Course')
-        return
+        try:
+            course = response.json()
+            self.course_name = course.get('name', 'Unknown Course')
+        except Exception:
+            self.course_name = 'Unknown Course'
 
     def get_course_name(self) -> str:
-        """Gets the name of the course.
-
-        Returns:
-        --------
-        str : The name of the course
-        """
         return self.course_name
 
 
 def main() -> None:
+    course_num = "1645103"
+    canvas = CanvasDiscussions('LPS_Production', 'Student', course_num)
     canvas.set_course_name(course_num)
     print(f"Course Name: {canvas.course_name}")
+
     course_enrollees = canvas.get_enrollees(course_num)
     if canvas.get_enrollment_type() != 'StudentEnrollment':
         if canvas.get_enrollment_type() == 'TaEnrollment':
             canvas.set_enrollment_type('Teacher')
         else:
             canvas.set_enrollment_type('TA')
-        course_enrollees_addt = canvas.get_enrollees(course_num)
-        course_enrollees = course_enrollees + course_enrollees_addt
-    if len(course_enrollees) > 0:
-        enrollee_discussion_tuple = canvas.get_course_discussion_data(
-            course_num, course_enrollees)
-        if enrollee_discussion_tuple[0] and enrollee_discussion_tuple[1]:
-            canvas.write_discussion_data_to_csv(enrollee_discussion_tuple[0],
-                                                enrollee_discussion_tuple[1])
-            return None
-    print(f"No CSV written for {canvas.course_name}")
-    return None
+        course_enrollees += canvas.get_enrollees(course_num)
+
+    if course_enrollees:
+        data, _titles = canvas.get_course_discussion_data(course_num, course_enrollees)
+        if data:
+            canvas.write_module_breakdown_xlsx(data)
+            return
+    print(f"No XLSX written for {canvas.course_name}")
 
 
 if __name__ == '__main__':
-    course_num = "1849493"
-    canvas = CanvasDiscussions('LPS_Production', 'Student', course_num)
     main()

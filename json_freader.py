@@ -1,10 +1,9 @@
-#
-# Levester Williams
+
+# Author: Levester Williams
 # 31 July 2024
 #
 # Platform info:
-# - python 3.11.0
-#
+# - python 3.12.0
 
 import json
 
