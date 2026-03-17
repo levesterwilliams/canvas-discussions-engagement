@@ -20,7 +20,7 @@ from collections import OrderedDict
 
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
-
+from box_upload import upload_file_to_box
 
 class CanvasDiscussions:
     server_url = {
@@ -377,6 +377,7 @@ class CanvasDiscussions:
         xlsx_path = self._output_basepath() / f"{self.course_name}__{role}_discussions.xlsx"
         wb.save(xlsx_path)
         print(f"XLSX written: {xlsx_path}")
+        upload_file_to_box(str(xlsx_path), "356265556253")
 
     # ---------- Course name
     def set_course_name(self, course_id: str) -> None:

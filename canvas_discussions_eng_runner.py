@@ -7,6 +7,7 @@
 
 from canvas_discussions_engagement import CanvasDiscussions
 
+
 def main() -> None:
     course_num_list = ["1882907", "1882399"]
     for course_num in course_num_list:
