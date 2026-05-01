@@ -164,7 +164,20 @@ class CanvasDiscussions:
         return self.enrollment_type[self.enrollment]
 
     # ---------- Canvas API helpers
-    def get_next_page_url(self, link_header: Optional[str]) -> str:
+    def _get_next_page_url(self, link_header: Optional[str]) -> str:
+        """
+        Extract next page URL from HTTP Link header.
+
+        Parameters
+        ----------
+        link_header : str or None
+            Link header from Canvas API response.
+
+        Returns
+        -------
+        str
+            URL for next page, or empty string if none exists.
+        """
         if link_header:
             links = link_header.split(',')
             for link in links:
@@ -173,6 +186,27 @@ class CanvasDiscussions:
         return ""
 
     def _paged_get(self, url: str) -> List[dict]:
+        """
+        Perform paginated GET requests.
+
+        Parameters
+        ----------
+        url : str
+            Initial API endpoint URL.
+
+        Returns
+        -------
+        list of dict
+            Aggregated response data across all pages.
+
+        Notes
+        -----
+        Retries up to 3 times on HTTP 500 errors.
+
+        Returns empty list on failure.
+        """
+        ...
+
         items: List[dict] = []
         page_url = url
         max_retries = 3
@@ -190,7 +224,7 @@ class CanvasDiscussions:
                         else:
                             print("Error: Unexpected API response format")
                             return []
-                        page_url = self.get_next_page_url(resp.headers.get('Link'))
+                        page_url = self._get_next_page_url(resp.headers.get('Link'))
                         break
                     except JSONDecodeError:
                         print("Failed to decode JSON data from response")
@@ -207,6 +241,19 @@ class CanvasDiscussions:
 
     # ---------- Enrollments
     def get_enrollees(self, course_id: str) -> List[Tuple[int, str]]:
+        """
+        Retrieve enrolled users for a course.
+
+        Parameters
+        ----------
+        course_id : str
+            Canvas course ID.
+
+        Returns
+        -------
+        list of tuple
+            List of ``(user_id, sortable_name)`` pairs.
+        """
         enrollments_url = (
             f'{self._get_server_url()}api/v1/courses/{course_id}/enrollments'
             f'?type[]={self.get_enrollment_type()}&per_page=100'
@@ -225,8 +272,22 @@ class CanvasDiscussions:
         return enrollments
 
     # ---------- Discussions
-    def get_full_topic_view(self, course_id: str, topic_id: int) -> dict:
-        # Fix accidental double slash
+    def _get_full_topic_view(self, course_id: str, topic_id: int) -> dict:
+        """
+        Retrieve full discussion topic view.
+
+        Parameters
+        ----------
+        course_id : str
+            Canvas course ID.
+        topic_id : int
+            Discussion topic ID.
+
+        Returns
+        -------
+        dict
+            Topic view data including participants, or empty dict on failure.
+        """
         url = (
             f'{self._get_server_url()}api/v1/courses/{course_id}'
             f'/discussion_topics/{topic_id}/view'
@@ -244,7 +305,7 @@ class CanvasDiscussions:
             print(f"Error fetching full topic view: {response.status_code}, {response.text}")
             return {}
 
-    def process_full_topic_view(
+    def _process_full_topic_view(
         self,
         course_id: str,
         topic_id: int,
@@ -253,7 +314,29 @@ class CanvasDiscussions:
         enrollees_in_course: List[Tuple[int, str]],
         list_topic_titles: List[str],
     ) -> None:
-        topic_view = self.get_full_topic_view(course_id, topic_id)
+        """
+        Update participation matrix for a single discussion.
+
+        Parameters
+        ----------
+        course_id : str
+            Canvas course ID.
+        topic_id : int
+            Discussion topic ID.
+        enrollee_discussion_data : dict
+            Mapping of enrollee name to participation flags.
+        topic_title : str
+            Title of the discussion topic.
+        enrollees_in_course : list of tuple
+            List of enrolled users.
+        list_topic_titles : list of str
+            Ordered list of discussion titles.
+
+        Notes
+        -----
+        Mutates ``enrollee_discussion_data`` in place.
+        """
+        topic_view = self._get_full_topic_view(course_id, topic_id)
         if not topic_view:
             return
         id_to_name = {uid: name for uid, name in enrollees_in_course}
@@ -272,6 +355,27 @@ class CanvasDiscussions:
         course_id: str,
         enrollees_in_course: List[Tuple[int, str]],
     ) -> Tuple[OrderedDictType[str, List[bool]], List[str]]:
+        """
+        Retrieve participation data for all course discussions.
+
+        Parameters
+        ----------
+        course_id : str
+            Canvas course ID.
+        enrollees_in_course : list of tuple
+            Enrolled users.
+
+        Returns
+        -------
+        OrderedDict of str to list of bool
+            Mapping of enrollee name to participation flags.
+        list of str
+            Ordered list of discussion titles.
+
+        Notes
+        -----
+        Also builds internal module-to-discussion mapping.
+        """
         page_url = f'{self._get_server_url()}api/v1/courses/{course_id}/discussion_topics?per_page=100'
         discussions: List[Tuple[str, int, str]] = []
         while page_url:
@@ -291,7 +395,7 @@ class CanvasDiscussions:
                             )
                             if isinstance(topic_id, int):
                                 discussions.append((topic_posted_date, topic_id, topic_title))
-                    page_url = self.get_next_page_url(response.headers.get('Link'))
+                    page_url = self._get_next_page_url(response.headers.get('Link'))
                 except json.JSONDecodeError:
                     print("Failed to decode JSON data from response")
                     return OrderedDict(), []
@@ -312,7 +416,7 @@ class CanvasDiscussions:
         }
 
         for _, topic_id, topic_title in discussions:
-            self.process_full_topic_view(
+            self._process_full_topic_view(
                 course_id,
                 topic_id,
                 enrollee_discussion_data,
@@ -322,24 +426,33 @@ class CanvasDiscussions:
             )
 
         # Build the module map here (normal path)
-        self.build_module_discussion_map(course_id)
+        self._build_module_discussion_map(course_id)
         print(f"Map keys for module are "
               f"{self.module_discussion_map.keys()}")
         ordered_by_sortable_name = OrderedDict(sorted(enrollee_discussion_data.items()))
         return ordered_by_sortable_name, list_topic_titles
 
     # ---------- Modules → Discussion mapping
-    def get_modules(self, course_id: str) -> List[dict]:
+    def _get_modules(self, course_id: str) -> List[dict]:
+        """
+        Retrieve course models
+        """
         url = f'{self._get_server_url()}api/v1/courses/{course_id}/modules?per_page=100'
         return self._paged_get(url)
 
-    def get_module_items(self, course_id: str, module_id: int) -> List[dict]:
+    def _get_module_items(self, course_id: str, module_id: int) -> List[dict]:
+        """
+        Retrieve items from modules
+        """
         url = f'{self._get_server_url()}api/v1/courses/{course_id}/modules/{module_id}/items?per_page=100'
         return self._paged_get(url)
 
-    def build_module_discussion_map(self, course_id: str) -> None:
+    def _build_module_discussion_map(self, course_id: str) -> None:
+        """
+        Build mapping of modules to discussion topic IDs.
+        """
         self.module_discussion_map = {}
-        modules = self.get_modules(course_id)
+        modules = self._get_modules(course_id)
         # Debug: surface empty modules early
         if not modules:
             print("No Canvas modules returned (empty list). Check course has Modules enabled and API token scope.")
@@ -349,9 +462,7 @@ class CanvasDiscussions:
             module_id = mod.get('id')
             if not isinstance(module_id, int):
                 continue
-            items = self.get_module_items(course_id, module_id)
-            # Optional debug:
-            # print(f"Module '{module_name}': {len(items)} items")
+            items = self._get_module_items(course_id, module_id)
             for it in items:
                 if it.get('type') == 'Discussion':
                     self.module_discussion_map.setdefault(module_name,
@@ -359,14 +470,24 @@ class CanvasDiscussions:
 
     # ---------- XLSX Writer
     def _output_basepath(self) -> Path:
+        """
+        Return folder to save output.
+        """
         download_folder = Path.home() / 'Downloads'
         download_folder.mkdir(parents=True, exist_ok=True)
         return download_folder
 
     def _role_label(self) -> str:
+        """
+        Label type of role of participants in discussion topics.
+        """
+
         return "students" if self.get_enrollment_type() == "StudentEnrollment" else "instructors"
 
     def _unique_sheet_name(self, wb: Workbook, base: str) -> str:
+        """
+        Generate unique XLSX sheet name.
+        """
         invalid = set('[]:*?/\\')
         cleaned = ''.join(ch for ch in base if ch not in invalid).strip().rstrip('.')
         if not cleaned:
@@ -391,10 +512,23 @@ class CanvasDiscussions:
             ws.column_dimensions[col_letter].width = min(max_len + 2, 60)
 
     def write_module_breakdown_xlsx(self, enrollee_discussion_data: Dict[str, List[bool]]) -> None:
-        # Why: Users sometimes call this directly; ensure module map exists.
+        """
+        Write participation data to Excel and upload to Box.
+
+        Parameters
+        ----------
+        enrollee_discussion_data : dict
+            Mapping of enrollee names to participation flags.
+
+        Notes
+        -----
+        - Generates one overview sheet and per-module sheets.
+        - Saves file to user's Downloads directory.
+        - Uploads file using Box API.
+        """
         if not self.module_discussion_map:
             # Attempt to build with the current course id
-            self.build_module_discussion_map(self.course_num)
+            self._build_module_discussion_map(self.course_num)
 
         if not self.discussions_meta:
             print("No discussion data to write.")
@@ -446,6 +580,13 @@ class CanvasDiscussions:
 
     # ---------- Course name
     def set_course_name(self, course_id: str) -> None:
+        """
+        Fetch and set course name.
+
+        Parameters
+        ----------
+        course_id : str
+        """
         course_url = f'{self._get_server_url()}api/v1/courses/{course_id}'
         response = requests.get(course_url, headers=self._headers())
         try:
@@ -455,6 +596,13 @@ class CanvasDiscussions:
             self.course_name = 'Unknown Course'
 
     def get_course_name(self) -> str:
+        """
+        Retrieve stored course name.
+
+        Returns
+        -------
+        str
+        """
         return self.course_name
 
 
