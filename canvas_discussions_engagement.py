@@ -23,6 +23,35 @@ from openpyxl.utils import get_column_letter
 from box_upload import upload_file_to_box
 
 class CanvasDiscussions:
+    """
+    Client for retrieving and analyzing discussion participation data from Canvas LMS.
+
+    This class provides methods to:
+    - Authenticate with the Canvas API
+    - Retrieve enrollments and discussion topics
+    - Map discussions to modules
+    - Aggregate participation data
+    - Export results to Excel and upload to Box
+
+    Parameters
+    ----------
+    server_type : str
+       Canvas environment identifier. Must be one of:
+       ``'LPS_Production'`` or ``'LPS_Test'``.
+    enrollment : str
+       Enrollment role to query. Must be one of:
+       ``'Student'``, ``'TA'``, or ``'Teacher'``.
+    course_number : str
+       Canvas course ID.
+
+    Attributes
+    ----------
+    discussions_meta : list of dict
+       Metadata for discussions in the course. Each dict contains:
+       ``{"id": int, "title": str}``.
+    module_discussion_map : dict of str to list of int
+       Mapping of module names to discussion topic IDs.
+    """
     server_url = {
         'LPS_Production': 'https://canvas.upenn.edu/',
         'LPS_Test': 'https://upenn.test.instructure.com/',
@@ -44,10 +73,16 @@ class CanvasDiscussions:
         self.module_discussion_map: Dict[str, List[int]] = {}         # module_name -> [discussion_topic_id, ...]
 
     # ---------- Credentials & headers
-    def get_token(self=None) -> dict:
-        return self.get_cred_env_var()
+    def _get_token(self=None) -> dict:
+        """
+        Retrieve authentication token mapping.
+        """
+        return self._get_cred_env_var()
 
-    def get_cred_json(self=None) -> dict:
+    def _get_cred_json(self=None) -> dict:
+        """
+        Load credentials from a JSON file.
+        """
         reader = JSONfreader()
         json_file_path = ""
         try:
@@ -63,7 +98,10 @@ class CanvasDiscussions:
             sys.exit(1)
         return cred
 
-    def get_cred_env_var(self=None) -> dict:
+    def _get_cred_env_var(self=None) -> dict:
+        """
+        Load credentials from environment variables.
+        """
         try:
             cred = json.loads(os.getenv('CANVAS_API_CRED'))
         except KeyError:
@@ -80,21 +118,48 @@ class CanvasDiscussions:
             sys.exit(1)
         return cred
 
-    def headers(self) -> dict:
-        token = self.get_token()
+    def _headers(self) -> dict:
+        """
+        Construct HTTP headers for Canvas API requests.
+        """
+        token = self._get_token()
         return {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {token[self.server_type]}',
         }
 
     # ---------- Simple getters/setters
-    def get_server_url(self=None) -> str:
+    def _get_server_url(self=None) -> str:
+        """
+        Get base URL for selected Canvas environment.
+        """
         return self.server_url[self.server_type]
 
     def get_enrollment_type(self=None) -> str:
+        """
+        Get Canvas API enrollment type string.
+
+        Returns
+        -------
+        str
+            Enrollment type (e.g., ``'StudentEnrollment'``).
+        """
         return self.enrollment_type[self.enrollment]
 
     def set_enrollment_type(self, enrollment_type: str) -> str:
+        """
+        Update enrollment type.
+
+        Parameters
+        ----------
+        enrollment_type : str
+            New enrollment role key.
+
+        Returns
+        -------
+        str
+            Updated Canvas enrollment type string.
+        """
         self.enrollment = enrollment_type
         return self.enrollment_type[self.enrollment]
 
@@ -114,7 +179,7 @@ class CanvasDiscussions:
         retry_delay = 2
         while page_url:
             for _ in range(max_retries):
-                resp = requests.get(page_url, headers=self.headers())
+                resp = requests.get(page_url, headers=self._headers())
                 if resp.status_code == 200:
                     try:
                         chunk = resp.json()
@@ -143,7 +208,7 @@ class CanvasDiscussions:
     # ---------- Enrollments
     def get_enrollees(self, course_id: str) -> List[Tuple[int, str]]:
         enrollments_url = (
-            f'{self.get_server_url()}api/v1/courses/{course_id}/enrollments'
+            f'{self._get_server_url()}api/v1/courses/{course_id}/enrollments'
             f'?type[]={self.get_enrollment_type()}&per_page=100'
         )
         items = self._paged_get(enrollments_url)
@@ -163,10 +228,10 @@ class CanvasDiscussions:
     def get_full_topic_view(self, course_id: str, topic_id: int) -> dict:
         # Fix accidental double slash
         url = (
-            f'{self.get_server_url()}api/v1/courses/{course_id}'
+            f'{self._get_server_url()}api/v1/courses/{course_id}'
             f'/discussion_topics/{topic_id}/view'
         )
-        response = requests.get(url, headers=self.headers())
+        response = requests.get(url, headers=self._headers())
         if response.status_code == 200:
             try:
                 return response.json()
@@ -207,10 +272,10 @@ class CanvasDiscussions:
         course_id: str,
         enrollees_in_course: List[Tuple[int, str]],
     ) -> Tuple[OrderedDictType[str, List[bool]], List[str]]:
-        page_url = f'{self.get_server_url()}api/v1/courses/{course_id}/discussion_topics?per_page=100'
+        page_url = f'{self._get_server_url()}api/v1/courses/{course_id}/discussion_topics?per_page=100'
         discussions: List[Tuple[str, int, str]] = []
         while page_url:
-            response = requests.get(page_url, headers=self.headers())
+            response = requests.get(page_url, headers=self._headers())
             if response.status_code == 200:
                 try:
                     discussion_topics = response.json()
@@ -265,11 +330,11 @@ class CanvasDiscussions:
 
     # ---------- Modules → Discussion mapping
     def get_modules(self, course_id: str) -> List[dict]:
-        url = f'{self.get_server_url()}api/v1/courses/{course_id}/modules?per_page=100'
+        url = f'{self._get_server_url()}api/v1/courses/{course_id}/modules?per_page=100'
         return self._paged_get(url)
 
     def get_module_items(self, course_id: str, module_id: int) -> List[dict]:
-        url = f'{self.get_server_url()}api/v1/courses/{course_id}/modules/{module_id}/items?per_page=100'
+        url = f'{self._get_server_url()}api/v1/courses/{course_id}/modules/{module_id}/items?per_page=100'
         return self._paged_get(url)
 
     def build_module_discussion_map(self, course_id: str) -> None:
@@ -377,12 +442,12 @@ class CanvasDiscussions:
         xlsx_path = self._output_basepath() / f"{self.course_name}__{role}_discussions.xlsx"
         wb.save(xlsx_path)
         print(f"XLSX written: {xlsx_path}")
-        upload_file_to_box(str(xlsx_path), "356265556253")
+        upload_file_to_box(str(xlsx_path), "379740227928")
 
     # ---------- Course name
     def set_course_name(self, course_id: str) -> None:
-        course_url = f'{self.get_server_url()}api/v1/courses/{course_id}'
-        response = requests.get(course_url, headers=self.headers())
+        course_url = f'{self._get_server_url()}api/v1/courses/{course_id}'
+        response = requests.get(course_url, headers=self._headers())
         try:
             course = response.json()
             self.course_name = course.get('name', 'Unknown Course')
