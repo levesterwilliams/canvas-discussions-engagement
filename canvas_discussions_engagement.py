@@ -20,7 +20,8 @@ from collections import OrderedDict
 
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
-from box_upload import upload_file_to_box
+import box_upload
+import course_config_loader
 
 class CanvasDiscussions:
     """
@@ -511,7 +512,8 @@ class CanvasDiscussions:
                 max_len = max(max_len, len(str(val)) if val is not None else 0)
             ws.column_dimensions[col_letter].width = min(max_len + 2, 60)
 
-    def write_module_breakdown_xlsx(self, enrollee_discussion_data: Dict[str, List[bool]]) -> None:
+    def write_module_breakdown_xlsx(self, enrollee_discussion_data: Dict[str,
+    List[bool]]) -> Path:
         """
         Write participation data to Excel and upload to Box.
 
@@ -576,7 +578,7 @@ class CanvasDiscussions:
         xlsx_path = self._output_basepath() / f"{self.course_name}__{role}_discussions.xlsx"
         wb.save(xlsx_path)
         print(f"XLSX written: {xlsx_path}")
-        upload_file_to_box(str(xlsx_path), "379740227928")
+        return xlsx_path
 
     # ---------- Course name
     def set_course_name(self, course_id: str) -> None:
@@ -607,25 +609,44 @@ class CanvasDiscussions:
 
 
 def main() -> None:
-    course_num = "1645103"
-    canvas = CanvasDiscussions('LPS_Production', 'Student', course_num)
-    canvas.set_course_name(course_num)
-    print(f"Course Name: {canvas.course_name}")
+    config_path = "courses.xlsx"
 
-    course_enrollees = canvas.get_enrollees(course_num)
-    if canvas.get_enrollment_type() != 'StudentEnrollment':
-        if canvas.get_enrollment_type() == 'TaEnrollment':
-            canvas.set_enrollment_type('Teacher')
-        else:
-            canvas.set_enrollment_type('TA')
-        course_enrollees += canvas.get_enrollees(course_num)
+    course_rows = course_config_loader.read_course_config_xlsx(config_path)
 
-    if course_enrollees:
-        data, _titles = canvas.get_course_discussion_data(course_num, course_enrollees)
-        if data:
-            canvas.write_module_breakdown_xlsx(data)
-            return
-    print(f"No XLSX written for {canvas.course_name}")
+    if not course_rows:
+        print("No valid course rows found.")
+        return
+
+    for course_name, course_id, box_folder_id in course_rows:
+        print(f"\nProcessing: {course_name} ({course_id})")
+
+        canvas = CanvasDiscussions('LPS_Production', 'Student', course_id)
+        canvas.course_name = course_name  # override instead of API call
+
+        course_enrollees = canvas.get_enrollees(course_id)
+
+        if canvas.get_enrollment_type() != 'StudentEnrollment':
+            if canvas.get_enrollment_type() == 'TaEnrollment':
+                canvas.set_enrollment_type('Teacher')
+            else:
+                canvas.set_enrollment_type('TA')
+            course_enrollees += canvas.get_enrollees(course_id)
+
+        if not course_enrollees:
+            print(f"No enrollees for {course_name}")
+            continue
+
+        data, _ = canvas.get_course_discussion_data(course_id, course_enrollees)
+
+        if not data:
+            print(f"No discussion data for {course_name}")
+            continue
+
+        # write file
+        xlsx_path = canvas.write_module_breakdown_xlsx(data)
+
+        # upload using row-specific folder
+        box_upload.upload_file_to_box(str(xlsx_path), box_folder_id)
 
 
 if __name__ == '__main__':

@@ -6,30 +6,49 @@
 # - python 3.12.0
 
 from canvas_discussions_engagement import CanvasDiscussions
+import course_config_loader
+import box_upload
 
 
 def main() -> None:
-    course_num_list = ["1882907", "1882399"]
-    for course_num in course_num_list:
-        canvas = CanvasDiscussions('LPS_Production', 'Student', course_num)
-        canvas.set_course_name(course_num)
-        print(f"Course Name: {canvas.course_name}")
+    config_path = "courses.xlsx"
 
-        course_enrollees = canvas.get_enrollees(course_num)
+    course_rows = course_config_loader.read_course_config_xlsx(config_path)
+
+    if not course_rows:
+        print("No valid course rows found.")
+        return
+
+    for course_name, course_id, box_folder_id in course_rows:
+        print(f"\nProcessing: {course_name} ({course_id})")
+
+        canvas = CanvasDiscussions('LPS_Production', 'Student', course_id)
+        canvas.course_name = course_name  # override instead of API call
+
+        course_enrollees = canvas.get_enrollees(course_id)
+
         if canvas.get_enrollment_type() != 'StudentEnrollment':
             if canvas.get_enrollment_type() == 'TaEnrollment':
                 canvas.set_enrollment_type('Teacher')
             else:
                 canvas.set_enrollment_type('TA')
-            course_enrollees += canvas.get_enrollees(course_num)
+            course_enrollees += canvas.get_enrollees(course_id)
 
-        data, _titles = canvas.get_course_discussion_data(course_num,
-                                                              course_enrollees)
-        if data:
-            canvas.write_module_breakdown_xlsx(data)
-        else:
-            print(f"No XLSX written for {canvas.course_name}")
-    return None
+        if not course_enrollees:
+            print(f"No enrollees for {course_name}")
+            continue
+
+        data, _ = canvas.get_course_discussion_data(course_id, course_enrollees)
+
+        if not data:
+            print(f"No discussion data for {course_name}")
+            continue
+
+        # write file
+        xlsx_path = canvas.write_module_breakdown_xlsx(data)
+
+        # upload using row-specific folder
+        box_upload.upload_file_to_box(str(xlsx_path), box_folder_id)
 
 if __name__ == '__main__':
     main()
