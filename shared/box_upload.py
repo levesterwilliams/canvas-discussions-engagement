@@ -2,7 +2,7 @@
 # Author: Levester Williams
 # Date: 16 March 2026
 
-"""Box upload helpers for generated Excel reports."""
+"""Box file transfer helpers for generated Excel reports and config files."""
 
 import json
 from pathlib import Path
@@ -13,6 +13,7 @@ from shared.box_auth import BoxAuthManager
 
 
 BOX_UPLOAD_URL = "https://upload.box.com/api/2.0/files/content"
+BOX_DOWNLOAD_URL_TEMPLATE = "https://api.box.com/2.0/files/{file_id}/content"
 
 
 def upload_file_to_box(local_file_path: str | Path, folder_id: str) -> str:
@@ -75,4 +76,45 @@ def upload_file_to_box(local_file_path: str | Path, folder_id: str) -> str:
         raise RuntimeError(f"Unexpected response format from Box: {response.text}") from exc
 
 
+def download_file_from_box(file_id: str, destination_path: str | Path) -> Path:
+    """Download a Box file to a local path.
 
+    Parameters
+    ----------
+    file_id : str
+        Fixed Box file ID for the source file.
+    destination_path : str or pathlib.Path
+        Local path where the downloaded file should be written.
+
+    Returns
+    -------
+    pathlib.Path
+        Local path to the downloaded file.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when the Box API rejects the download.
+
+    Notes
+    -----
+    Authentication is delegated to :class:`shared.box_auth.BoxAuthManager`.
+    """
+    local_path = Path(destination_path)
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+
+    auth = BoxAuthManager(json_file="box_api_cred.json")
+    token = auth.get_valid_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    download_url = BOX_DOWNLOAD_URL_TEMPLATE.format(file_id=file_id)
+
+    with requests.get(download_url, headers=headers, stream=True, timeout=60) as response:
+        if response.status_code != 200:
+            raise RuntimeError(f"Box download failed: {response.status_code} {response.text}")
+
+        with local_path.open("wb") as file_handle:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    file_handle.write(chunk)
+
+    return local_path

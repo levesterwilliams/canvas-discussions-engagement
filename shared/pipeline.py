@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
-from shared.box_upload import upload_file_to_box
+from shared.box_upload import download_file_from_box, upload_file_to_box
 from shared.canvas_discussions import CanvasDiscussions
 from shared.course_config_loader import read_course_config_xlsx
+
+BOX_COURSE_CONFIG_FILE_ID = "123456789012" #PLACEHOLDER
 
 
 @dataclass
@@ -62,7 +65,7 @@ def _resolve_course_config_path(config_path: str | None = None) -> Path:
 
     1. ``config_path`` argument
     2. ``COURSE_CONFIG_PATH`` environment variable
-    3. ``courses.xlsx`` in the function app root
+    3. a downloaded copy of the Box-hosted workbook in the temp directory
     """
     if config_path:
         return Path(config_path)
@@ -71,7 +74,8 @@ def _resolve_course_config_path(config_path: str | None = None) -> Path:
     if env_path:
         return Path(env_path)
 
-    return Path(__file__).resolve().parent.parent / "courses.xlsx"
+    temp_path = Path(tempfile.gettempdir()) / "canvas-discussion-reports" / "courses.xlsx"
+    return download_file_from_box(BOX_COURSE_CONFIG_FILE_ID, temp_path)
 
 
 def run_course_reports(config_path: str | None = None) -> List[CourseRunResult]:
