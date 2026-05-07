@@ -1,6 +1,5 @@
 # Author: Levester Williams
 # 9 June 2025
-#
 # Platform info:
 # - python 3.12.0
 

@@ -1,95 +1,78 @@
 # box_upload.py
 # Author: Levester Williams
 # Date: 16 March 2026
-#
-# Script to upload files to Box
 
+"""Box upload helpers for generated Excel reports."""
+
+import json
+from pathlib import Path
 
 import requests
-import os
-import json
-from box_auth import BoxAuthManager
+
+from shared.box_auth import BoxAuthManager
+
 
 BOX_UPLOAD_URL = "https://upload.box.com/api/2.0/files/content"
 
-def upload_file_to_box(local_file_path, folder_id):
-    """
-    Upload a local file to a Box folder.
 
-    This function authenticates with the Box API using a valid access token,
-    constructs a multipart/form-data request, and uploads the specified file
-    to the given Box folder.
+def upload_file_to_box(local_file_path: str | Path, folder_id: str) -> str:
+    """Upload a local file to a Box folder.
 
     Parameters
     ----------
-    local_file_path : str
-        Path to the local file to be uploaded.
+    local_file_path : str or pathlib.Path
+        Path to the file that should be uploaded.
     folder_id : str
-        The Box folder ID where the file will be uploaded.
+        Box folder identifier that will receive the upload.
 
     Returns
     -------
-    None
-        This function does not return a value. On success, it prints the
-        uploaded file's Box file ID.
+    str
+        Box file ID returned by the upload API.
 
     Raises
     ------
     FileNotFoundError
-        If the specified ``local_file_path`` does not exist.
-    box_auth.BoxAuthError
-        If authentication or token retrieval fails.
-    requests.RequestException
-        If the HTTP request fails due to network-related issues.
+        Raised when ``local_file_path`` does not exist.
     RuntimeError
-        If the Box API response indicates failure or returns an unexpected format.
+        Raised when the Box API rejects the upload or returns an
+        unexpected payload.
 
     Notes
     -----
-    - The function uses the Box upload endpoint:
-        ``https://upload.box.com/api/2.0/files/content``.
-    - A valid OAuth2 access token is required and is obtained via
-        ``BoxAuthManager``.
-    - The request is sent as ``multipart/form-data`` with file content and
-        metadata attributes.
-    - Successful responses typically return HTTP status codes 200 or 201.
+    Authentication is delegated to :class:`shared.box_auth.BoxAuthManager`.
     """
-    auth = BoxAuthManager("box_api_cred.json")
+    file_path = Path(local_file_path)
+    if not file_path.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    auth = BoxAuthManager(json_file="box_api_cred.json")
     token = auth.get_valid_access_token()
-    headers = {'Authorization': 'Bearer ' + token}
-
+    headers = {"Authorization": f"Bearer {token}"}
     attributes = {
-        "name": os.path.basename(local_file_path),
-        "parent": {"id": folder_id}
+        "name": file_path.name,
+        "parent": {"id": str(folder_id)},
     }
 
-    files = {
-        "attributes": (None, json.dumps(attributes)),
-        "file": open(local_file_path, 'rb')
-    }
-
-
-    response = requests.post(
-        BOX_UPLOAD_URL,
-        headers=headers,
-        files=files
-    )
-    print("STATUS:", response.status_code)
-    print("RESPONSE:", response.text)
+    with file_path.open("rb") as file_handle:
+        response = requests.post(
+            BOX_UPLOAD_URL,
+            headers=headers,
+            files={
+                "attributes": (None, json.dumps(attributes)),
+                "file": (file_path.name, file_handle),
+            },
+            timeout=60,
+        )
 
     if response.status_code not in (200, 201):
-        raise Exception("box upload failed")
+        raise RuntimeError(f"Box upload failed: {response.status_code} {response.text}")
 
     try:
         data = response.json()
-    except ValueError as e:
-        raise RuntimeError(
-            f"Invalid JSON response from Box: {response.text}"
-        ) from e
-
-    if "entries" not in data:
-        raise Exception(f"Unexpected response format: {data}")
-    print("uploaded to Box: " + response.json()["entries"][0]["id"])
+        return str(data["entries"][0]["id"])
+    except (ValueError, KeyError, IndexError) as exc:
+        raise RuntimeError(f"Unexpected response format from Box: {response.text}") from exc
 
 
 

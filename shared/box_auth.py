@@ -5,121 +5,229 @@
 # Script to gain access to BOX API
 
 
+"""Box authentication helpers for Azure Functions and local execution."""
+
 import json
 import os
-import time
 import random
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
 import requests
 
-# =========================
-# Exceptions
-# =========================
 
 class BoxAuthError(Exception):
     """Base exception for Box authentication errors."""
-    pass
 
 
 class BoxAuthFileError(BoxAuthError):
     """Raised when credential file operations fail."""
-    pass
 
 
 class BoxAuthTokenError(BoxAuthError):
     """Raised when token refresh fails."""
-    pass
 
-# =========================
-# Manager
-# =========================
+
+@dataclass
+class BoxCredentials:
+    """In-memory representation of Box OAuth credentials.
+
+    Attributes
+    ----------
+    client_id : str
+        Box application client ID.
+    client_secret : str
+        Box application client secret.
+    refresh_token : str
+        Refresh token used to mint access tokens.
+    access_token : str, optional
+        Cached access token when available.
+    expires_at : int, optional
+        Unix timestamp at which the cached access token expires.
+    """
+
+    client_id: str
+    client_secret: str
+    refresh_token: str
+    access_token: str = ""
+    expires_at: int = 0
+
 
 class BoxAuthManager:
-    def __init__(self, json_file: str):
-        """
-        Initialize the BoxAuthManager.
+    """Acquire and refresh Box OAuth access tokens.
+
+    Parameters
+    ----------
+    json_file : str or None, optional
+        Path to a local JSON credential file used as a fallback when
+        environment variables are not present.
+
+    Notes
+    -----
+    In Azure Functions, credentials are expected to come from
+    environment variables backed by app settings or Key Vault references.
+    """
+
+    def __init__(self, json_file: str | None = None) -> None:
+        """Initialize the authentication manager.
 
         Parameters
         ----------
-        json_file : str
-            Path to credential JSON file.
+        json_file : str or None, optional
+            Fallback credential file path for local development.
         """
-        self._credentials = None
-        self._json_file = json_file
+        self._json_file = Path(json_file) if json_file else None
+        self._credentials: BoxCredentials | None = None
 
-    def load_json_file(self, json_file: str) -> dict:
-        """
-        Load credentials from disk.
-
-        Parameters
-        ----------
-        json_file : str
-            Path to JSON credential file.
+    def _load_from_env(self) -> BoxCredentials | None:
+        """Load Box credentials from environment variables.
 
         Returns
         -------
-        dict
-            Credential dictionary.
+        BoxCredentials or None
+            Parsed credentials when all required variables are present,
+            otherwise ``None``.
+        """
+        client_id = os.getenv("BOX_CLIENT_ID")
+        client_secret = os.getenv("BOX_CLIENT_SECRET")
+        refresh_token = os.getenv("BOX_REFRESH_TOKEN")
+
+        if not client_id or not client_secret or not refresh_token:
+            return None
+
+        expires_at_raw = os.getenv("BOX_EXPIRES_AT", "0")
+        try:
+            expires_at = int(expires_at_raw)
+        except ValueError:
+            expires_at = 0
+
+        return BoxCredentials(
+            client_id=client_id,
+            client_secret=client_secret,
+            refresh_token=refresh_token,
+            access_token=os.getenv("BOX_ACCESS_TOKEN", ""),
+            expires_at=expires_at,
+        )
+
+    def _load_from_file(self) -> BoxCredentials:
+        """Load Box credentials from a JSON file.
+
+        Returns
+        -------
+        BoxCredentials
+            Parsed credential payload from disk.
 
         Raises
         ------
         BoxAuthFileError
+            Raised when the file is missing, unreadable, malformed,
+            or missing required keys.
         """
-        try:
-            with open(json_file, 'r') as file:
-                self._credentials = json.load(file)
-                return self._credentials
-        except FileNotFoundError as e:
-            raise BoxAuthFileError("Credential file not found.") from e
-        except json.JSONDecodeError as e:
-            raise BoxAuthFileError("Invalid JSON in credential file.") from e
-        except Exception as e:
-            raise BoxAuthFileError("Failed to load credentials.") from e
+        if not self._json_file:
+            raise BoxAuthFileError("No Box credential file path was configured.")
 
-    def _ensure_loaded(self):
-        """Ensure credentials are loaded correctly"""
+        try:
+            with self._json_file.open("r", encoding="utf-8") as file:
+                payload = json.load(file)
+        except FileNotFoundError as exc:
+            raise BoxAuthFileError("Credential file not found.") from exc
+        except json.JSONDecodeError as exc:
+            raise BoxAuthFileError("Invalid JSON in credential file.") from exc
+        except OSError as exc:
+            raise BoxAuthFileError("Failed to read credential file.") from exc
+
+        try:
+            return BoxCredentials(
+                client_id=payload["BOX_CLIENT_ID"],
+                client_secret=payload["BOX_CLIENT_SECRET"],
+                refresh_token=payload["refresh_token"],
+                access_token=payload.get("access_token", ""),
+                expires_at=int(payload.get("expires_at", 0)),
+            )
+        except KeyError as exc:
+            raise BoxAuthFileError("Credential file is missing required keys.") from exc
+
+    def _ensure_loaded(self) -> None:
+        """Ensure credentials have been loaded into memory.
+
+        Notes
+        -----
+        Environment variables are preferred. File-backed credentials are
+        used only as a fallback for local development.
+        """
+        if self._credentials is not None:
+            return
+
+        self._credentials = self._load_from_env()
         if self._credentials is None:
-            self.load_json_file(self._json_file)
+            self._credentials = self._load_from_file()
 
-    def _save_credentials(self):
-        """Atomically persist credentials to disk."""
-        temp_file = self._json_file + ".tmp"
+    def _save_credentials(self) -> None:
+        """Persist the latest credentials to disk when file-backed.
+
+        Raises
+        ------
+        BoxAuthFileError
+            Raised when updated credentials cannot be written.
+
+        Notes
+        -----
+        When credentials originate from environment variables, no write
+        occurs because the function filesystem should not be treated as
+        durable secret storage.
+        """
+        if not self._json_file or self._credentials is None:
+            return
+
+        temp_file = self._json_file.with_suffix(self._json_file.suffix + ".tmp")
+        payload = {
+            "BOX_CLIENT_ID": self._credentials.client_id,
+            "BOX_CLIENT_SECRET": self._credentials.client_secret,
+            "refresh_token": self._credentials.refresh_token,
+            "access_token": self._credentials.access_token,
+            "expires_at": self._credentials.expires_at,
+        }
 
         try:
-            with open(temp_file, "w") as f:
-                json.dump(self._credentials, f, indent=2)
-
+            with temp_file.open("w", encoding="utf-8") as file:
+                json.dump(payload, file, indent=2)
             os.replace(temp_file, self._json_file)
-        except Exception as e:
-            raise BoxAuthFileError("Failed to save credentials.") from e
+        except OSError as exc:
+            raise BoxAuthFileError("Failed to save credentials.") from exc
 
-    def _refresh_access_token(self,
-                              max_retries: int = 5,
-                              base_delay: float = 0.5,
-                              max_delay: float = 30.0):
-        """
-        Refresh the Box access token using exponential backoff.
+    def _refresh_access_token(
+        self,
+        max_retries: int = 5,
+        base_delay: float = 0.5,
+        max_delay: float = 30.0,
+    ) -> str:
+        """Refresh the Box access token using the refresh token.
 
         Parameters
         ----------
-        max_retries : int
-            Maximum retry attempts.
-        base_delay : float
-            Initial delay (seconds).
-        max_delay : float
-            Maximum delay cap (seconds).
+        max_retries : int, optional
+            Maximum number of transient retry attempts.
+        base_delay : float, optional
+            Starting delay in seconds for exponential backoff.
+        max_delay : float, optional
+            Upper bound for the retry delay in seconds.
 
         Returns
         -------
         str
-            New access token.
+            Newly issued Box access token.
 
         Raises
         ------
         BoxAuthTokenError
+            Raised when token refresh fails permanently.
         """
         self._ensure_loaded()
+        assert self._credentials is not None
 
         url = "https://api.box.com/oauth2/token"
+        last_error: Exception | None = None
 
         for attempt in range(1, max_retries + 1):
             try:
@@ -127,82 +235,62 @@ class BoxAuthManager:
                     url,
                     data={
                         "grant_type": "refresh_token",
-                        "refresh_token": self._credentials["refresh_token"],
-                        "client_id": self._credentials["BOX_CLIENT_ID"],
-                        "client_secret": self._credentials["BOX_CLIENT_SECRET"]
+                        "refresh_token": self._credentials.refresh_token,
+                        "client_id": self._credentials.client_id,
+                        "client_secret": self._credentials.client_secret,
                     },
-                    timeout=10
+                    timeout=10,
                 )
-            except requests.RequestException as e:
+            except requests.RequestException as exc:
+                last_error = exc
                 retryable = True
-                error = e
             else:
-                # Success
                 if response.status_code == 200:
                     try:
                         data = response.json()
-
-                        self._credentials["access_token"] = data["access_token"]
-                        self._credentials["refresh_token"] = data["refresh_token"]
-                        self._credentials["expires_at"] = (
-                            int(time.time()) + data["expires_in"] - 60
-                        )
-
+                        self._credentials.access_token = data["access_token"]
+                        self._credentials.refresh_token = data["refresh_token"]
+                        self._credentials.expires_at = int(time.time()) + int(data["expires_in"]) - 60
                         self._save_credentials()
-                        return self._credentials["access_token"]
+                        return self._credentials.access_token
+                    except KeyError as exc:
+                        raise BoxAuthTokenError("Malformed token response.") from exc
 
-                    except KeyError as e:
-                        raise BoxAuthTokenError(
-                            "Malformed token response."
-                        ) from e
-
-                # Retry only transient errors
-                elif response.status_code in (429, 500, 502, 503, 504):
-                    retryable = True
-                    error = BoxAuthTokenError(
-                        f"Transient error: {response.status_code} {response.text}"
+                if response.status_code in (429, 500, 502, 503, 504):
+                    last_error = BoxAuthTokenError(
+                        f"Transient error refreshing token: {response.status_code} {response.text}"
                     )
+                    retryable = True
                 else:
-                    # Non-retryable
                     raise BoxAuthTokenError(
                         f"Token refresh failed: {response.status_code} {response.text}"
                     )
 
-            # Handle retry
             if attempt == max_retries or not retryable:
-                raise BoxAuthTokenError(
-                    f"Token refresh failed after {attempt} attempts."
-                ) from error
+                break
 
-            # Exponential backoff with jitter
             delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
-            jitter = random.uniform(0, delay)
-            sleep_time = jitter
+            time.sleep(random.uniform(0, delay))
 
-            time.sleep(sleep_time)
+        raise BoxAuthTokenError(f"Token refresh failed after {max_retries} attempts.") from last_error
 
-    def get_valid_access_token(self):
-        """
-        Get a valid access token, refreshing if necessary.
+    def get_valid_access_token(self) -> str:
+        """Return a valid Box access token.
 
         Returns
         -------
         str
-            Valid access token.
+            Active access token suitable for authenticated API calls.
 
-        Raises
-        ------
-        BoxAuthError
+        Notes
+        -----
+        A cached token is reused when it has not expired. Otherwise a
+        token refresh is performed.
         """
-        try:
-            self._ensure_loaded()
+        self._ensure_loaded()
+        assert self._credentials is not None
 
-            if time.time() < self._credentials.get("expires_at", 0):
-                return self._credentials["access_token"]
+        if self._credentials.access_token and time.time() < self._credentials.expires_at:
+            return self._credentials.access_token
 
-            return self._refresh_access_token()
-
-        except BoxAuthError:
-            raise
-        except Exception as e:
-            raise BoxAuthError("Failed to obtain valid access token.") from e
+        return self._refresh_access_token()

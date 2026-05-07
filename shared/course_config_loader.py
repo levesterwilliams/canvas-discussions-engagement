@@ -1,41 +1,53 @@
 # course_config_loader.py
 # Author: Levester Williams
 # 1 May 2026
-#
 
-from openpyxl import load_workbook
+"""Course configuration loading helpers.
+
+This module reads the workbook that drives the reporting pipeline and
+normalizes each usable row into a tuple containing the course name,
+Canvas course ID, and destination Box folder ID.
+"""
+
+from pathlib import Path
 from typing import List, Tuple
 
+from openpyxl import load_workbook
 
-def read_course_config_xlsx(path: str) -> List[Tuple[str, str, str]]:
-    """
-    Read course configuration from Excel.
+
+def read_course_config_xlsx(path: str | Path) -> List[Tuple[str, str, str]]:
+    """Read course configuration rows from an Excel workbook.
 
     Parameters
     ----------
-    path : str
-        Path to XLSX file.
+    path : str or pathlib.Path
+        Path to the course configuration workbook.
 
     Returns
     -------
-    list of tuple
-        List of (course_name, canvas_course_id, box_folder_id)
-    """
-    wb = load_workbook(path)
-    ws = wb.active
+    list of tuple of str
+        Normalized rows in the form
+        ``(course_name, course_id, box_folder_id)``.
 
-    rows = []
-    for i, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+    Notes
+    -----
+    Rows missing a course ID or Box folder ID are skipped.
+    """
+    workbook = load_workbook(filename=Path(path))
+    worksheet = workbook.active
+
+    rows: List[Tuple[str, str, str]] = []
+    for index, row in enumerate(worksheet.iter_rows(min_row=2, values_only=True), start=2):
         course_name, course_id, box_folder_id = row
 
         if not course_id or not box_folder_id:
-            print(f"Skipping row {i}: missing required fields")
+            print(f"Skipping row {index}: missing required fields")
             continue
 
         rows.append((
             str(course_name or "Unknown Course"),
             str(course_id),
-            str(box_folder_id)
+            str(box_folder_id),
         ))
 
     return rows
