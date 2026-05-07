@@ -1,0 +1,17 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "DISCUSSION_REPORT_SCHEDULE": "0 0 17 * * 1",
+    "WEBSITE_TIME_ZONE": "Eastern Standard Time",
+    "COURSE_CONFIG_PATH": "courses.xlsx",
+    "OUTPUT_DIRECTORY": "",
+    "CANVAS_API_CRED": "{\"LPS_Production\": \"<canvas-token>\", \"LPS_Test\": \"<canvas-test-token>\"}",
+    "BOX_CLIENT_ID": "<box-client-id>",
+    "BOX_CLIENT_SECRET": "<box-client-secret>",
+    "BOX_REFRESH_TOKEN": "<box-refresh-token>",
+    "BOX_ACCESS_TOKEN": "",
+    "BOX_EXPIRES_AT": "0"
+  }
+}
