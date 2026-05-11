@@ -7,18 +7,22 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
+from zoneinfo import ZoneInfo
 
 from shared.box_upload import download_file_from_box, upload_file_to_box
 from shared.canvas_discussions import CanvasDiscussions
-from shared.course_config_loader import read_course_config_xlsx
+from shared.course_config_loader import read_course_config_xlsx, read_scheduled_run_dates
 
-BOX_COURSE_CONFIG_FILE_ID = "123456789012" #PLACEHOLDER
+BOX_COURSE_CONFIG_FILE_ID = "123456789012"
+BOX_SCHEDULE_FILE_ID = "234567890123"
+RUN_TIME_ZONE = "America/New_York"
 
 
 @dataclass
@@ -78,13 +82,55 @@ def _resolve_course_config_path(config_path: str | None = None) -> Path:
     return download_file_from_box(BOX_COURSE_CONFIG_FILE_ID, temp_path)
 
 
-def run_course_reports(config_path: str | None = None) -> List[CourseRunResult]:
+def _resolve_schedule_config_path(schedule_path: str | None = None) -> Path | None:
+    """Resolve the workbook path used to load scheduled run dates.
+
+    Parameters
+    ----------
+    schedule_path : str or None, optional
+        Explicit schedule workbook path supplied by the caller.
+
+    Returns
+    -------
+    pathlib.Path or None
+        Resolved path to the schedule workbook, or ``None`` when
+        workbook-driven scheduling is disabled.
+
+    Notes
+    -----
+    Resolution order is:
+
+    1. ``schedule_path`` argument
+    2. ``SCHEDULE_CONFIG_PATH`` environment variable
+    3. a downloaded copy of the Box-hosted schedule workbook
+    4. ``None`` when ``BOX_SCHEDULE_FILE_ID`` is blank
+    """
+    if schedule_path:
+        return Path(schedule_path)
+
+    env_path = os.getenv("SCHEDULE_CONFIG_PATH")
+    if env_path:
+        return Path(env_path)
+
+    if not BOX_SCHEDULE_FILE_ID.strip():
+        return None
+
+    temp_path = Path(tempfile.gettempdir()) / "canvas-discussion-reports" / "schedule.xlsx"
+    return download_file_from_box(BOX_SCHEDULE_FILE_ID, temp_path)
+
+
+def run_course_reports(
+    config_path: str | None = None,
+    schedule_path: str | None = None,
+) -> List[CourseRunResult]:
     """Run the full reporting job for every configured course.
 
     Parameters
     ----------
     config_path : str or None, optional
         Optional override for the course configuration workbook path.
+    schedule_path : str or None, optional
+        Optional override for the schedule workbook path.
 
     Returns
     -------
@@ -101,6 +147,22 @@ def run_course_reports(config_path: str | None = None) -> List[CourseRunResult]:
     - upload the workbook to Box
     """
     resolved_config_path = _resolve_course_config_path(config_path)
+    today = datetime.now(ZoneInfo(RUN_TIME_ZONE)).date()
+    resolved_schedule_path = _resolve_schedule_config_path(schedule_path)
+
+    if resolved_schedule_path is not None:
+        scheduled_run_dates = read_scheduled_run_dates(resolved_schedule_path)
+        if scheduled_run_dates and today not in scheduled_run_dates:
+            logging.info(
+                "Skipping report run on %s because it is not listed in %s.",
+                today.isoformat(),
+                resolved_schedule_path,
+            )
+            return []
+
+    else:
+        logging.info("No separate schedule workbook configured. Running on every Monday timer trigger.")
+
     course_rows = read_course_config_xlsx(resolved_config_path)
 
     if not course_rows:

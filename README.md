@@ -17,34 +17,66 @@ Set:
 
 That runs the job every Monday at 5:00 PM Eastern, including daylight saving time handling on Azure App Service / Functions.
 
+## Workbook-driven Mondays
+
+Keep the Azure timer fixed to every Monday at 5:00 PM Eastern. Use a second Box-hosted workbook to decide which Mondays are active.
+
+Recommended files in Box:
+
+- `courses.xlsx`: course rows with `course_name`, `course_id`, and `box_folder_id`
+- `schedule.xlsx`: a `run_date` column containing allowed run dates in `YYYY-MM-DD` format
+
+Recommended `schedule.xlsx` layout:
+
+```text
+run_date
+2026-05-18
+2026-06-01
+2026-06-29
+```
+
+Behavior:
+
+- If `schedule.xlsx` is configured and today is not listed, the function exits without processing courses.
+- If no schedule workbook is configured, the function keeps the old behavior and runs every Monday trigger.
+- In either workbook, a named worksheet is optional. The loader prefers `courses` for course data and `schedule` for dates, but will fall back to the active sheet for backward compatibility.
+
 ## Local development
 
 1. Create a virtualenv and install `requirements.txt`.
 2. Copy `local.settings.json.example` to `local.settings.json`.
-3. Update the placeholder Box file ID constant in `shared/pipeline.py`.
+3. Update the placeholder Box file ID constants in `shared/pipeline.py`.
 4. Run locally with Azure Functions Core Tools:
 
 ```powershell
 func start
 ```
 
-## Course configuration source
+## Box workbook sources
 
-The job downloads `courses.xlsx` from Box using a fixed file ID that is currently hardcoded in [shared/pipeline.py](C:/Users/Levester/Documents/New%20project/shared/pipeline.py).
+The job downloads `courses.xlsx` and optionally `schedule.xlsx` from Box using fixed file IDs that are currently hardcoded in [shared/pipeline.py](C:/Users/Levester/Documents/New%20project/shared/pipeline.py).
 
 ```python
-BOX_COURSE_CONFIG_FILE_ID = "123456789012" #PLACEHOLDER
+BOX_COURSE_CONFIG_FILE_ID = "123456789012" # Placeholder
+BOX_SCHEDULE_FILE_ID = "234567890123" # Placeholder
 ```
 
-Replace the placeholder with the real Box file ID for the workbook.
+Replace the placeholders with the real Box file IDs for the workbooks.
 
-Download resolution order:
+Course workbook resolution order:
 
 1. Explicit `config_path` argument
 2. `COURSE_CONFIG_PATH` environment variable
 3. Box download to the function temp directory
 
-This lets you keep the operational workbook in Box and update it without redeploying code.
+Schedule workbook resolution order:
+
+1. Explicit `schedule_path` argument
+2. `SCHEDULE_CONFIG_PATH` environment variable
+3. Box download to the function temp directory
+4. disabled when `BOX_SCHEDULE_FILE_ID` is blank
+
+This lets you keep both operational workbooks in Box and update them without redeploying code.
 
 ## Azure CLI deployment
 
@@ -53,10 +85,32 @@ az login
 az group create --name <rg> --location eastus
 az storage account create --name <storage> --location eastus --resource-group <rg> --sku Standard_LRS
 az functionapp create --resource-group <rg> --consumption-plan-location eastus --runtime python --runtime-version 3.12 --functions-version 4 --name <function-app-name> --os-type Linux --storage-account <storage>
-az functionapp config appsettings set --name <function-app-name> --resource-group <rg> --settings WEBSITE_TIME_ZONE="Eastern Standard Time" DISCUSSION_REPORT_SCHEDULE="0 0 17 * * 1" CANVAS_API_CRED='<json>' BOX_CLIENT_ID='<id>' BOX_CLIENT_SECRET='<secret>' BOX_REFRESH_TOKEN='<refresh-token>'
+az functionapp config appsettings set --name <function-app-name> --resource-group <rg> --settings WEBSITE_TIME_ZONE="Eastern Standard Time" DISCUSSION_REPORT_SCHEDULE="0 0 17 * * 1" CANVAS_API_CRED='<json>' KEY_VAULT_NAME='<vault-name>'
 func azure functionapp publish <function-app-name>
 ```
 
-## Important Box note
+## Box OAuth persistence
 
-The current Box OAuth refresh-token flow rotates refresh tokens. For production, persist the refreshed token outside the function filesystem, such as Key Vault or another durable store, or switch to a non-rotating server-to-server Box auth pattern.
+The app now prefers Azure Key Vault for Box OAuth token storage so the rotated refresh token survives across timer runs.
+
+Create these secrets in Key Vault:
+
+- `box-client-id`
+- `box-client-secret`
+- `box-refresh-token`
+- `box-access-token`
+- `box-expires-at`
+
+Required app setting:
+
+- `KEY_VAULT_NAME=<vault-name>`
+
+Recommended permissions:
+
+- Enable the Function App managed identity.
+- Grant it permission to read and write secrets in the vault.
+- With Azure RBAC, `Key Vault Secrets Officer` is the simplest role for this flow.
+
+Local development fallback:
+
+- If `KEY_VAULT_NAME` is not set, `shared/box_auth.py` falls back to `box_api_cred.json` when one is available.
